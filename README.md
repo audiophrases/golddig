@@ -65,6 +65,15 @@ See:
 
 Install the frontend dependencies and run the validation commands:
 
+### Quick Launchers (Clickable `.bat` files)
+
+For quick access on Windows, open the [`launchers/`](launchers/) folder in File Explorer and double-click:
+- **`launchers/start-golddig.bat`**: Immediately launches the production desktop app.
+- **`launchers/start-dev-mode.bat`**: Starts the live development server with hot-reloading.
+- **`launchers/run-tests-and-benchmarks.bat`**: Runs the entire test suite and latency benchmark in a console window.
+
+### Command Line
+
 ```sh
 npm install
 npm run check
@@ -73,6 +82,7 @@ npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo run --manifest-path src-tauri/Cargo.toml --bin golddig-bench
 ```
+
 
 ### Ingestion CLI (`golddig-pack`)
 

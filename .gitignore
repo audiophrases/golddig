@@ -11,6 +11,8 @@
 
 # Rust
 /target/
+/src-tauri/target/
+/src-tauri/gen/schemas/
 
 # Node/Vite
 /node_modules/
@@ -31,3 +33,5 @@ Thumbs.db
 # Logs and temporary files
 *.log
 /tmp/
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*

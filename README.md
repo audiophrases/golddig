@@ -61,6 +61,19 @@ See:
 - [`docs/roadmap.md`](docs/roadmap.md)
 - [`docs/licensing.md`](docs/licensing.md)
 
+## Development
+
+Install the frontend dependencies and run the validation commands:
+
+```sh
+npm install
+npm run check
+npm run build
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+Start the desktop application in development mode with `npm run tauri dev`.
+
 ## Important distinction
 
 Wiktionary is the natural primary dictionary source. Wikipedia is an encyclopedia: it can later be an optional article source or a corpus for collocation statistics, but it should not be the foundation of lexical entries.

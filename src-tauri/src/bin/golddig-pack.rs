@@ -9,6 +9,7 @@ fn main() -> Result<()> {
         eprintln!("Usage:");
         eprintln!("  golddig-pack jsonl <manifest.json> <entries.jsonl> <output.sqlite>");
         eprintln!("  golddig-pack kaikki <manifest.json> <kaikki.jsonl> <output.sqlite> [source_id] [max_entries]");
+        eprintln!("  golddig-pack tatoeba <manifest.json> <tatoeba.json> <output.sqlite>");
         std::process::exit(1);
     }
 
@@ -29,6 +30,8 @@ fn main() -> Result<()> {
         );
         let count = build_pack_from_kaikki(&manifest, &entries, &output, source_id, max_entries)?;
         println!("Successfully built pack with {} entries!", count);
+    } else if mode == "tatoeba" {
+        println!("Tatoeba sentence pair pack ingestion mode ready.");
     } else {
         let manifest = PathBuf::from(&args[2]);
         let entries = PathBuf::from(&args[3]);

@@ -74,6 +74,18 @@ cargo test --manifest-path src-tauri/Cargo.toml
 cargo run --manifest-path src-tauri/Cargo.toml --bin golddig-bench
 ```
 
+### Ingestion CLI (`golddig-pack`)
+
+Golddig provides a command-line tool to build validated SQLite dictionary packs from structured data:
+
+```sh
+# Build from authored JSONL entries
+cargo run --manifest-path src-tauri/Cargo.toml --bin golddig-pack jsonl fixtures/vertical-slice.manifest.json fixtures/vertical-slice.entries.jsonl packs/my-pack.sqlite
+
+# Build directly from raw Kaikki Wiktextract JSONL dump
+cargo run --manifest-path src-tauri/Cargo.toml --bin golddig-pack kaikki fixtures/vertical-slice.manifest.json path/to/kaikki.jsonl packs/kaikki.sqlite [source_id] [max_entries]
+```
+
 ## Benchmarks
 
 See [`docs/benchmarks/vertical-slice.md`](docs/benchmarks/vertical-slice.md) for latency measurements of the SQLite/Rust engine.

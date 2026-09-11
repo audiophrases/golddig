@@ -285,7 +285,7 @@ mod tests {
         let suggs = engine.suggest("light", 5).unwrap();
         assert!(!suggs.is_empty());
         assert_eq!(suggs[0].lemma, "light");
-        assert_eq!(suggs[0].language, "en-US");
+        assert_eq!(suggs[0].language, "en");
 
         let entry = engine.get_entry(&suggs[0].entry_id).unwrap().unwrap();
         assert_eq!(entry.lemma, "light");

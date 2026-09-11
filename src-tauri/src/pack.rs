@@ -56,6 +56,8 @@ pub fn build_pack_from_files<P: AsRef<Path>>(
 ) -> anyhow::Result<()> {
     if output_db_path.as_ref().exists() {
         let _ = std::fs::remove_file(&output_db_path);
+        let _ = std::fs::remove_file(format!("{}-wal", output_db_path.as_ref().display()));
+        let _ = std::fs::remove_file(format!("{}-shm", output_db_path.as_ref().display()));
     }
 
     let mut conn = Connection::open(&output_db_path)?;
@@ -67,13 +69,13 @@ pub fn build_pack_from_files<P: AsRef<Path>>(
     let tx = conn.transaction()?;
 
     tx.execute(
-        "INSERT INTO manifest (key, value) VALUES ('manifest', ?)",
+        "INSERT OR REPLACE INTO manifest (key, value) VALUES ('manifest', ?)",
         params![serde_json::to_string(&manifest)?],
     )?;
 
     for src in &manifest.sources {
         tx.execute(
-            "INSERT INTO sources (id, name, url, license, attribution) VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO sources (id, name, url, license, attribution) VALUES (?, ?, ?, ?, ?)",
             params![src.id, src.name, src.url, src.license, src.attribution],
         )?;
     }

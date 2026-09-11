@@ -65,6 +65,22 @@ See:
 
 Install the frontend dependencies and run the validation commands:
 
+### Dictionary Packs & Real Data Pipeline
+
+Golddig supports compile-time and runtime modular packs. A full English core dictionary with 61,652 entries (~73 MB SQLite) is pre-compiled at `packs/kaikki-english-core.sqlite`.
+
+To download and build dictionaries for any supported language:
+```sh
+# Build English core pack (61,652 entries, includes 'hi', 'hello', etc.):
+python scripts/fetch_and_build_pack.py en
+
+# Or Catalan, Spanish, French, German:
+python scripts/fetch_and_build_pack.py ca
+python scripts/fetch_and_build_pack.py es
+python scripts/fetch_and_build_pack.py fr
+python scripts/fetch_and_build_pack.py de
+```
+
 ### Quick Launchers & Shortcut
 
 For quick access on Windows, open the [`launchers/`](launchers/) folder in File Explorer:

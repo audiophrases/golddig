@@ -11,7 +11,7 @@ describe('Fixtures and Schema Validation', () => {
     const manifest = JSON.parse(raw);
 
     expect(manifest.id).toBeDefined();
-    expect(manifest.languages).toEqual(expect.arrayContaining(['en-US', 'ca', 'fr', 'de', 'es']));
+    expect(manifest.languages).toEqual(expect.arrayContaining(['en', 'ca', 'fr', 'de', 'es']));
     expect(manifest.sources.length).toBeGreaterThanOrEqual(1);
 
     for (const src of manifest.sources) {
@@ -63,7 +63,7 @@ describe('Fixtures and Schema Validation', () => {
       }
     }
 
-    expect(languagesFound.has('en-US')).toBe(true);
+    expect(languagesFound.has('en')).toBe(true);
     expect(languagesFound.has('ca')).toBe(true);
     expect(languagesFound.has('es')).toBe(true);
     expect(languagesFound.has('fr')).toBe(true);

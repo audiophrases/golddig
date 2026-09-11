@@ -67,7 +67,7 @@ impl KaikkiEntry {
 
         let raw_lang = self.lang_code.unwrap_or_else(|| "und".to_string());
         let language = match raw_lang.as_str() {
-            "en" => "en-US".to_string(),
+            "en" => "en".to_string(),
             other => other.to_string(),
         };
 
@@ -255,7 +255,7 @@ mod tests {
             if let Ok(entry) = serde_json::from_str::<KaikkiEntry>(&l) {
                 if let Some(record) = entry.into_entry_record("kaikki-wiktionary") {
                     assert!(!record.lemma.is_empty());
-                    assert_eq!(record.language, "en-US");
+                    assert_eq!(record.language, "en");
                     for s in &record.senses {
                         if !s.translations.is_empty() {
                             has_translations = true;

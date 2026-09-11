@@ -3,7 +3,7 @@
 ## Product constraints
 
 - Keep ordinary lookup local-first, fast, and usable without an account or network connection.
-- Initial languages are American English (`en-US`), Catalan (`ca`), French (`fr`), German (`de`), and Spanish (`es`).
+- Initial languages are English (`en`), Catalan (`ca`), French (`fr`), German (`de`), and Spanish (`es`).
 - Preserve source boundaries in the UI. Do not automatically merge senses from different providers unless alignment is backed by an explicit identifier or a tested alignment rule.
 - Keep application binaries separate from optional dictionary/audio data packs.
 - Keep the result surface text-first: semantic formatted text, restrained typography, and whitespace. Do not add image-heavy cards, decorative media, source-supplied CSS/JavaScript, or animation-heavy UI.

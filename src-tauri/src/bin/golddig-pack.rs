@@ -15,6 +15,10 @@ fn main() -> Result<()> {
 
     let mode = &args[1];
     if mode == "kaikki" {
+        if args.len() < 5 {
+            eprintln!("Usage: golddig-pack kaikki <manifest.json> <kaikki.jsonl> <output.sqlite> [source_id] [max_entries]");
+            std::process::exit(1);
+        }
         let manifest = PathBuf::from(&args[2]);
         let entries = PathBuf::from(&args[3]);
         let output = PathBuf::from(&args[4]);
@@ -32,10 +36,26 @@ fn main() -> Result<()> {
         println!("Successfully built pack with {} entries!", count);
     } else if mode == "tatoeba" {
         println!("Tatoeba sentence pair pack ingestion mode ready.");
-    } else {
+    } else if mode == "jsonl" {
+        if args.len() < 5 {
+            eprintln!("Usage: golddig-pack jsonl <manifest.json> <entries.jsonl> <output.sqlite>");
+            std::process::exit(1);
+        }
         let manifest = PathBuf::from(&args[2]);
         let entries = PathBuf::from(&args[3]);
         let output = PathBuf::from(&args[4]);
+
+        println!(
+            "Building pack from {:?} and {:?} to {:?}...",
+            manifest, entries, output
+        );
+        build_pack_from_files(&manifest, &entries, &output)?;
+        println!("Pack built successfully!");
+    } else {
+        // Fallback for legacy positional: golddig-pack <manifest.json> <entries.jsonl> <output.sqlite>
+        let manifest = PathBuf::from(&args[1]);
+        let entries = PathBuf::from(&args[2]);
+        let output = PathBuf::from(&args[3]);
 
         println!(
             "Building pack from {:?} and {:?} to {:?}...",

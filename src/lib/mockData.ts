@@ -7,7 +7,7 @@ export const MOCK_PACKS: PackInfo[] = [
     id: 'vertical-slice',
     name: 'Multi-lingual Core (5 Languages)',
     version: '0.1.0',
-    languages: ['en-US', 'ca', 'es', 'fr', 'de'],
+    languages: ['en', 'ca', 'es', 'fr', 'de'],
     path: 'packs/vertical-slice.sqlite',
     enabled: true,
     entry_count: 7,
@@ -17,7 +17,7 @@ export const MOCK_PACKS: PackInfo[] = [
 export const MOCK_ENTRIES: Record<string, EntryRecord> = {
   'en:light': {
     id: 'en:light',
-    language: 'en-US',
+    language: 'en',
     lemma: 'light',
     pos: 'noun',
     pronunciations: [{ ipa: '/laɪt/', type: 'ipa', source_id: 'wiktionary-core' }],
@@ -63,7 +63,7 @@ export const MOCK_ENTRIES: Record<string, EntryRecord> = {
           },
         ],
         translations: [
-          { target_lang: 'en-US', text: 'light', source_id: 'softcatala-ca' },
+          { target_lang: 'en', text: 'light', source_id: 'softcatala-ca' },
           { target_lang: 'es', text: 'luz', source_id: 'softcatala-ca' },
           { target_lang: 'fr', text: 'lumière', source_id: 'softcatala-ca' },
           { target_lang: 'de', text: 'Licht', source_id: 'softcatala-ca' },
@@ -93,7 +93,7 @@ export const MOCK_ENTRIES: Record<string, EntryRecord> = {
           },
         ],
         translations: [
-          { target_lang: 'en-US', text: 'collection', source_id: 'softcatala-ca' },
+          { target_lang: 'en', text: 'collection', source_id: 'softcatala-ca' },
           { target_lang: 'es', text: 'colección', source_id: 'softcatala-ca' },
           { target_lang: 'fr', text: 'collection', source_id: 'softcatala-ca' },
           { target_lang: 'de', text: 'Sammlung', source_id: 'softcatala-ca' },
@@ -123,7 +123,7 @@ export const MOCK_ENTRIES: Record<string, EntryRecord> = {
           },
         ],
         translations: [
-          { target_lang: 'en-US', text: 'anus', source_id: 'wiktionary-core' },
+          { target_lang: 'en', text: 'anus', source_id: 'wiktionary-core' },
           { target_lang: 'ca', text: 'anus', source_id: 'wiktionary-core' },
         ],
         synonyms: [],
@@ -151,7 +151,7 @@ export const MOCK_ENTRIES: Record<string, EntryRecord> = {
           },
         ],
         translations: [
-          { target_lang: 'en-US', text: 'year', source_id: 'wiktionary-core' },
+          { target_lang: 'en', text: 'year', source_id: 'wiktionary-core' },
           { target_lang: 'ca', text: 'any', source_id: 'wiktionary-core' },
           { target_lang: 'fr', text: 'année', source_id: 'wiktionary-core' },
           { target_lang: 'de', text: 'Jahr', source_id: 'wiktionary-core' },
@@ -181,7 +181,7 @@ export const MOCK_ENTRIES: Record<string, EntryRecord> = {
           },
         ],
         translations: [
-          { target_lang: 'en-US', text: 'heart', source_id: 'wiktionary-core' },
+          { target_lang: 'en', text: 'heart', source_id: 'wiktionary-core' },
           { target_lang: 'ca', text: 'cor', source_id: 'wiktionary-core' },
           { target_lang: 'es', text: 'corazón', source_id: 'wiktionary-core' },
           { target_lang: 'de', text: 'Herz', source_id: 'wiktionary-core' },
@@ -211,7 +211,7 @@ export const MOCK_ENTRIES: Record<string, EntryRecord> = {
           },
         ],
         translations: [
-          { target_lang: 'en-US', text: 'street', source_id: 'wiktionary-core' },
+          { target_lang: 'en', text: 'street', source_id: 'wiktionary-core' },
           { target_lang: 'ca', text: 'carrer', source_id: 'wiktionary-core' },
           { target_lang: 'es', text: 'calle', source_id: 'wiktionary-core' },
           { target_lang: 'fr', text: 'rue', source_id: 'wiktionary-core' },

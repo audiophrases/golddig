@@ -117,7 +117,7 @@ impl SearchEngine {
         false
     }
 
-    /// Searches for prefix or matching suggestions across all active packs.
+    /// Searches for prefix, wildcard ('?' or '*'), or phrase matching suggestions across all active packs.
     /// Orders by match type: exact > form > loose.
     pub fn suggest(&self, query: &str, limit: usize) -> Result<Vec<SearchSuggestion>> {
         let q_clean = query.trim();
@@ -125,8 +125,20 @@ impl SearchEngine {
             return Ok(Vec::new());
         }
 
-        let q_exact = q_clean.to_lowercase();
-        let q_prefix = format!("{}%", q_exact);
+        let q_lower = q_clean.to_lowercase();
+        let has_wildcard = q_clean.contains('?') || q_clean.contains('*');
+        let is_phrase = q_clean.contains(' ') && !has_wildcard;
+
+        // Convert user wildcards ('?' -> '_', '*' -> '%') or build prefix/phrase pattern
+        let sql_pattern = if has_wildcard {
+            q_lower.replace('*', "%").replace('?', "_")
+        } else if is_phrase {
+            // Phrase lookup: look for multi-word phrase matching lemma/term
+            format!("%{}%", q_lower)
+        } else {
+            // Standard word prefix lookup
+            format!("{}%", q_lower)
+        };
 
         let mut all_suggestions = Vec::new();
 
@@ -139,22 +151,24 @@ impl SearchEngine {
                 r#"
                 SELECT DISTINCT e.id, e.lemma, e.language, e.pos, s.term, s.term_type
                 FROM search_terms s
-                JOIN entries e ON e.id = s.entry_id
-                WHERE s.term LIKE ?1 OR s.loose_key LIKE ?1
-                ORDER BY 
-                    CASE 
+                JOIN entries e ON s.entry_id = e.id
+                WHERE s.term LIKE ?1
+                ORDER BY
+                    CASE
                         WHEN s.term = ?2 AND s.term_type = 'lemma' THEN 1
                         WHEN s.term LIKE ?1 AND s.term_type = 'lemma' THEN 2
-                        WHEN s.term = ?2 AND s.term_type = 'form' THEN 3
-                        WHEN s.term LIKE ?1 AND s.term_type = 'form' THEN 4
-                        ELSE 5
+                        WHEN s.term = ?2 AND s.term_type = 'transcription' THEN 3
+                        WHEN s.term = ?2 AND s.term_type = 'form' THEN 4
+                        WHEN s.term LIKE ?1 AND s.term_type = 'transcription' THEN 5
+                        WHEN s.term LIKE ?1 AND s.term_type = 'form' THEN 6
+                        ELSE 7
                     END,
-                    length(e.lemma) ASC
+                    length(s.term) ASC
                 LIMIT ?3
                 "#,
             )?;
 
-            let rows = stmt.query_map(params![q_prefix, q_exact, limit as i64], |row| {
+            let rows = stmt.query_map(params![sql_pattern, q_lower, limit as i64], |row| {
                 let entry_id: String = row.get(0)?;
                 let lemma: String = row.get(1)?;
                 let language: String = row.get(2)?;
@@ -177,29 +191,26 @@ impl SearchEngine {
             }
         }
 
-        // If nothing matched via standard prefix, attempt language-specific loose search fallback across active packs
+        // If nothing matched via standard search or wildcards, attempt phrase/content search or loose search
         if all_suggestions.is_empty() {
-            let loose = generate_search_keys(q_clean, "generic");
-            let loose_prefix = format!("{}%", loose.loose_key);
+            if is_phrase {
+                // Secondary phrase search inside example sentences or definitions across entries
+                let phrase_pattern = format!("%{}%", q_lower);
+                for pack in &self.packs {
+                    if !pack.enabled {
+                        continue;
+                    }
 
-            for pack in &self.packs {
-                if !pack.enabled {
-                    continue;
-                }
+                    let mut phrase_stmt = pack.conn.prepare(
+                        r#"
+                        SELECT DISTINCT id, lemma, language, pos, lemma as term, 'phrase' as term_type
+                        FROM entries
+                        WHERE data_json LIKE ?1
+                        LIMIT ?2
+                        "#,
+                    )?;
 
-                let mut loose_stmt = pack.conn.prepare(
-                    r#"
-                    SELECT DISTINCT e.id, e.lemma, e.language, e.pos, s.term, 'loose' as term_type
-                    FROM search_terms s
-                    JOIN entries e ON e.id = s.entry_id
-                    WHERE s.loose_key LIKE ?1
-                    ORDER BY length(e.lemma) ASC
-                    LIMIT ?2
-                    "#,
-                )?;
-
-                let loose_rows =
-                    loose_stmt.query_map(params![loose_prefix, limit as i64], |row| {
+                    let phrase_rows = phrase_stmt.query_map(params![phrase_pattern, limit as i64], |row| {
                         Ok(SearchSuggestion {
                             entry_id: row.get(0)?,
                             lemma: row.get(1)?,
@@ -210,8 +221,54 @@ impl SearchEngine {
                         })
                     })?;
 
-                for s in loose_rows {
-                    all_suggestions.push(s?);
+                    for s in phrase_rows {
+                        all_suggestions.push(s?);
+                    }
+                }
+            } else if !has_wildcard {
+                // Check loose forms across standard and specialized language rules (Spanish, Arabic, Chinese/Pinyin)
+                let loose = generate_search_keys(q_clean, "generic");
+                let loose_ar = generate_search_keys(q_clean, "ary");
+                let loose_zh = generate_search_keys(q_clean, "zh");
+
+                for pack in &self.packs {
+                    if !pack.enabled {
+                        continue;
+                    }
+
+                    let mut loose_stmt = pack.conn.prepare(
+                        r#"
+                        SELECT DISTINCT e.id, e.lemma, e.language, e.pos, s.term, 'loose' as term_type
+                        FROM search_terms s
+                        JOIN entries e ON e.id = s.entry_id
+                        WHERE s.loose_key LIKE ?1 OR s.loose_key LIKE ?2 OR s.loose_key LIKE ?3
+                        ORDER BY length(e.lemma) ASC
+                        LIMIT ?4
+                        "#,
+                    )?;
+
+                    let loose_rows = loose_stmt.query_map(
+                        params![
+                            format!("{}%", loose.loose_key),
+                            format!("{}%", loose_ar.loose_key),
+                            format!("{}%", loose_zh.loose_key),
+                            limit as i64
+                        ],
+                        |row| {
+                            Ok(SearchSuggestion {
+                                entry_id: row.get(0)?,
+                                lemma: row.get(1)?,
+                                language: row.get(2)?,
+                                pos: row.get(3)?,
+                                matched_term: row.get(4)?,
+                                match_type: row.get(5)?,
+                            })
+                        },
+                    )?;
+
+                    for s in loose_rows {
+                        all_suggestions.push(s?);
+                    }
                 }
             }
         }
@@ -359,5 +416,25 @@ mod tests {
         engine.set_pack_enabled("golddig-vertical-slice-core", true);
         let suggs2 = engine.suggest("light", 5).unwrap();
         assert!(!suggs2.is_empty(), "Re-enabled pack must yield suggestions");
+    }
+
+    #[test]
+    fn test_search_wildcard_and_phrase_lookup() {
+        let engine = get_fixture_engine();
+
+        // '?' replaces single character: l?ght -> light
+        let res_single = engine.suggest("l?ght", 5).unwrap();
+        assert!(!res_single.is_empty(), "Wildcard '?' lookup must find 'light'");
+        assert_eq!(res_single[0].lemma, "light");
+
+        // '*' replaces zero or more characters: l*t -> light
+        let res_multi = engine.suggest("l*t", 5).unwrap();
+        assert!(!res_multi.is_empty(), "Wildcard '*' lookup must find 'light'");
+        assert!(res_multi.iter().any(|s| s.lemma == "light"));
+
+        // Phrase lookup: "morning light"
+        let res_phrase = engine.suggest("morning light", 5).unwrap();
+        assert!(!res_phrase.is_empty(), "Phrase search must find 'light'");
+        assert_eq!(res_phrase[0].lemma, "light");
     }
 }

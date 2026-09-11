@@ -12,6 +12,20 @@ SOURCES = {
         "raw": "fixtures/kaikki-simple-en.jsonl",
         "output": "packs/kaikki-english-core.sqlite",
     },
+    "ary": {
+        "name": "Moroccan Arabic (Darija)",
+        "url": "https://kaikki.org/dictionary/Moroccan%20Arabic/kaikki.org-dictionary-MoroccanArabic.jsonl",
+        "manifest": "fixtures/kaikki-ary.manifest.json",
+        "raw": "fixtures/kaikki-ary.jsonl",
+        "output": "packs/kaikki-darija.sqlite",
+    },
+    "zh": {
+        "name": "Chinese (Mandarin)",
+        "url": "https://kaikki.org/dictionary/Mandarin/kaikki.org-dictionary-Mandarin.jsonl",
+        "manifest": "fixtures/kaikki-zh.manifest.json",
+        "raw": "fixtures/kaikki-mandarin.jsonl",
+        "output": "packs/kaikki-mandarin.sqlite",
+    },
     "ca": {
         "name": "Catalan",
         "url": "https://kaikki.org/dictionary/Catalan/kaikki.org-dictionary-Catalan.jsonl",

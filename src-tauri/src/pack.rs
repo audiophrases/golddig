@@ -113,6 +113,17 @@ pub fn build_pack_from_files<P: AsRef<Path>>(
                 params![entry.id, form_keys.exact_normalized, form_keys.loose_key, entry.language],
             )?;
         }
+
+        // Search terms: Transcriptions / Pinyin
+        for p in &entry.pronunciations {
+            if p.kind == "pinyin" {
+                let pinyin_keys = generate_search_keys(&p.ipa, &entry.language);
+                tx.execute(
+                    "INSERT INTO search_terms (entry_id, term, term_type, loose_key, language) VALUES (?, ?, 'transcription', ?, ?)",
+                    params![entry.id, pinyin_keys.exact_normalized, pinyin_keys.loose_key, entry.language],
+                )?;
+            }
+        }
     }
 
     tx.commit()?;
@@ -194,6 +205,17 @@ pub fn build_pack_from_kaikki<P: AsRef<Path>>(
                     "INSERT INTO search_terms (entry_id, term, term_type, loose_key, language) VALUES (?, ?, 'form', ?, ?)",
                     params![entry.id, form_keys.exact_normalized, form_keys.loose_key, entry.language],
                 )?;
+            }
+
+            // Also index pinyin / romanized transcriptions in search_terms so users can search by transcription
+            for p in &entry.pronunciations {
+                if p.kind == "pinyin" {
+                    let pinyin_keys = generate_search_keys(&p.ipa, &entry.language);
+                    tx.execute(
+                        "INSERT INTO search_terms (entry_id, term, term_type, loose_key, language) VALUES (?, ?, 'transcription', ?, ?)",
+                        params![entry.id, pinyin_keys.exact_normalized, pinyin_keys.loose_key, entry.language],
+                    )?;
+                }
             }
 
             count += 1;

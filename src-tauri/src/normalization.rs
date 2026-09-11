@@ -28,6 +28,8 @@ pub fn generate_search_keys(input: &str, lang: &str) -> SearchKey {
         "ca" => loose_catalan(&exact_normalized),
         "de" => loose_german(&exact_normalized),
         "fr" => loose_french(&exact_normalized),
+        "ary" | "ar" => loose_arabic(&exact_normalized),
+        "zh" | "cmn" => loose_pinyin(&exact_normalized),
         _ => loose_generic(&exact_normalized),
     };
 
@@ -135,6 +137,49 @@ fn loose_generic(s: &str) -> String {
     out
 }
 
+fn loose_arabic(s: &str) -> String {
+    // Strip Arabic diacritics / harakat and normalize alifs
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            // Harakat / Tashkeel
+            '\u{064B}'..='\u{065F}' | '\u{0670}' => {},
+            // Normalize alif with hamza / madda to plain alif
+            'أ' | 'إ' | 'آ' | 'ٱ' => out.push('ا'),
+            // Normalize taa marbuta to haa or taa
+            'ة' => out.push('ه'),
+            // Normalize alif maqsura to yaa
+            'ى' => out.push('ي'),
+            _ => {
+                if !c.is_ascii_punctuation() && !c.is_whitespace() {
+                    out.push(c);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn loose_pinyin(s: &str) -> String {
+    // Strip tone marks from Pinyin for loose search: āáǎà -> a, etc.
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            'ā' | 'á' | 'ǎ' | 'à' => out.push('a'),
+            'ē' | 'é' | 'ě' | 'è' => out.push('e'),
+            'ī' | 'í' | 'ǐ' | 'ì' => out.push('i'),
+            'ō' | 'ó' | 'ǒ' | 'ò' => out.push('o'),
+            'ū' | 'ú' | 'ǔ' | 'ù' | 'ǖ' | 'ǘ' | 'ǚ' | 'ǜ' | 'ü' => out.push('u'),
+            _ => {
+                if !c.is_ascii_punctuation() && !c.is_whitespace() {
+                    out.push(c);
+                }
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,5 +221,17 @@ mod tests {
         let key = generate_search_keys("cœur", "fr");
         assert_eq!(key.exact_normalized, "cœur");
         assert_eq!(key.loose_key, "coeur");
+    }
+
+    #[test]
+    fn test_arabic_alif_and_tashkeel() {
+        let key = generate_search_keys("أَنَا", "ary");
+        assert_eq!(key.loose_key, "انا");
+    }
+
+    #[test]
+    fn test_pinyin_tones() {
+        let key = generate_search_keys("nǐhǎo", "zh");
+        assert_eq!(key.loose_key, "nihao");
     }
 }

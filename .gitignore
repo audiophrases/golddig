@@ -2,7 +2,6 @@
 /data/
 /packs/*
 !/packs/vertical-slice.sqlite
-!/packs/kaikki-english-core.sqlite
 *.sqlite3
 *.db
 *.jsonl

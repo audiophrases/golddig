@@ -1,0 +1,18 @@
+{
+  "id": "kaikki-moroccan-arabic",
+  "name": "Kaikki Wiktionary Moroccan Arabic (Darija)",
+  "version": "2026.09.06",
+  "schema_version": 1,
+  "languages": ["ary"],
+  "created_at": "2026-09-11T12:00:00Z",
+  "license": "CC-BY-SA-3.0",
+  "sources": [
+    {
+      "id": "kaikki-wiktionary",
+      "name": "Kaikki.org Wiktionary Extracted Dictionary",
+      "url": "https://kaikki.org/",
+      "license": "CC-BY-SA-3.0",
+      "attribution": "Extracted from Wiktionary via Wiktextract and Kaikki.org"
+    }
+  ]
+}

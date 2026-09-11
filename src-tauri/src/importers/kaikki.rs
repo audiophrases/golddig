@@ -8,6 +8,7 @@ pub struct KaikkiSound {
     pub ipa: Option<String>,
     pub tags: Option<Vec<String>>,
     pub audio: Option<String>,
+    pub zh_pron: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +56,9 @@ pub struct KaikkiEntry {
     pub sounds: Option<Vec<KaikkiSound>>,
     pub senses: Option<Vec<KaikkiSense>>,
     pub forms: Option<Vec<KaikkiForm>>,
+    pub related: Option<Vec<KaikkiSynonym>>,
+    pub derived: Option<Vec<KaikkiSynonym>>,
+    pub coordinate_terms: Option<Vec<KaikkiSynonym>>,
 }
 
 impl KaikkiEntry {
@@ -68,6 +72,8 @@ impl KaikkiEntry {
         let raw_lang = self.lang_code.unwrap_or_else(|| "und".to_string());
         let language = match raw_lang.as_str() {
             "en" => "en".to_string(),
+            "ary" => "ary".to_string(),
+            "zh" | "cmn" => "zh".to_string(),
             other => other.to_string(),
         };
 
@@ -82,11 +88,11 @@ impl KaikkiEntry {
             None => format!("{}:{}{}", language, lemma, etym_suffix),
         };
 
-        // Map pronunciations (IPA)
+        // Map pronunciations (IPA and romanized / pinyin transcriptions)
         let mut pronunciations = Vec::new();
-        if let Some(sounds) = self.sounds {
+        if let Some(sounds) = &self.sounds {
             for sound in sounds {
-                if let Some(ipa) = sound.ipa {
+                if let Some(ipa) = &sound.ipa {
                     let clean_ipa = ipa.trim().to_string();
                     if !clean_ipa.is_empty() {
                         pronunciations.push(PronunciationRecord {
@@ -95,6 +101,40 @@ impl KaikkiEntry {
                             source_id: source_id.to_string(),
                         });
                     }
+                }
+                if let Some(zh) = &sound.zh_pron {
+                    let clean_zh = zh.trim().to_string();
+                    if !clean_zh.is_empty() {
+                        pronunciations.push(PronunciationRecord {
+                            ipa: clean_zh,
+                            kind: "pinyin".to_string(),
+                            source_id: source_id.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Extract common collocations / related terms at entry level
+        let mut entry_collocations = Vec::new();
+        if let Some(rel) = &self.related {
+            for r in rel {
+                if let Some(w) = &r.word {
+                    entry_collocations.push(w.clone());
+                }
+            }
+        }
+        if let Some(der) = &self.derived {
+            for d in der {
+                if let Some(w) = &d.word {
+                    entry_collocations.push(w.clone());
+                }
+            }
+        }
+        if let Some(coord) = &self.coordinate_terms {
+            for c in coord {
+                if let Some(w) = &c.word {
+                    entry_collocations.push(w.clone());
                 }
             }
         }
@@ -157,13 +197,20 @@ impl KaikkiEntry {
                     }
                 }
 
+                // Attach entry-level collocations to the first sense
+                let collocations = if idx == 0 {
+                    entry_collocations.clone()
+                } else {
+                    Vec::new()
+                };
+
                 senses.push(SenseRecord {
                     id: sense_id,
                     definition,
                     examples,
                     translations,
                     synonyms,
-                    collocations: Vec::new(),
+                    collocations,
                     source_id: source_id.to_string(),
                 });
             }
@@ -173,7 +220,7 @@ impl KaikkiEntry {
             return None;
         }
 
-        // Map forms
+        // Map forms and romanizations/transcriptions
         let mut forms = Vec::new();
         if let Some(raw_forms) = self.forms {
             for f in raw_forms {

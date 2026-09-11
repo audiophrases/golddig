@@ -116,7 +116,7 @@
       <div class="search-bar">
         <input
           type="search"
-          placeholder="Type a word (en, ca, es, fr, de)..."
+          placeholder="Type a word, phrase, or pattern (e.g. l?ght, l*t)..."
           bind:value={query}
           oninput={handleInput}
           aria-label="Dictionary search"

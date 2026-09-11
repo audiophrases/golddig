@@ -65,6 +65,17 @@ See:
 
 Install the frontend dependencies and run the validation commands:
 
+### Search Features
+
+- **Standard Prefix & Exact Match:** Fast indexed prefix queries.
+- **Wildcard Search (`?` and `*`):**
+  - `?` replaces exactly 1 character (e.g. `l?ght` matches `light`).
+  - `*` replaces 0 or more characters (e.g. `l*t` matches `light`).
+- **Phrase Lookup:**
+  - Multi-word queries (e.g. `morning light`, `hola y adiós`, `salam 3likom`) match directly across lemmas, collocations, definitions, and sentence examples.
+- **Accent & Diacritic Normalization:**
+  - Catalan ela geminada (`col·lecció` / `col.leccio`), Spanish `ñ` vs `n`, German `ß` vs `ss`, French `œ` vs `oe`, Arabic Alif/Tashkeel, and Pinyin tones.
+
 ### Dictionary Packs & Real Data Pipeline
 
 Golddig supports compile-time and runtime modular packs. A full English core dictionary with 61,652 entries (~73 MB SQLite) is pre-compiled at `packs/kaikki-english-core.sqlite`.

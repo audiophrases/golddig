@@ -1,13 +1,30 @@
 <script lang="ts">
   import type { EntryRecord } from '../types';
+  import { speak } from '../tts';
 
   let { entry }: { entry: EntryRecord } = $props();
+
+  function playAudio(text: string, lang: string) {
+    speak(text, lang);
+  }
 </script>
 
 <article class="entry-view">
   <header class="entry-header">
     <div class="header-line">
       <h1 class="entry-lemma">{entry.lemma}</h1>
+      <button
+        class="tts-btn"
+        onclick={() => playAudio(entry.lemma, entry.language)}
+        title="Listen with Neural Edge Voice ({entry.language})"
+        aria-label="Speak pronunciation"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+          <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+          <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+        </svg>
+      </button>
       <span class="entry-lang">{entry.language}</span>
       {#if entry.pos}
         <span class="entry-pos">({entry.pos})</span>
@@ -64,6 +81,17 @@
                 {#each sense.examples as ex}
                   <li class="example-item">
                     <span class="ex-quote">“{ex.text}”</span>
+                    <button
+                      class="tts-mini-btn"
+                      onclick={() => playAudio(ex.text, entry.language)}
+                      title="Listen to example"
+                      aria-label="Speak example"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                      </svg>
+                    </button>
                     {#if ex.translation}
                       <span class="ex-trans">— {ex.translation}</span>
                     {/if}
@@ -110,6 +138,24 @@
     align-items: baseline;
     gap: 0.5rem;
     flex-wrap: wrap;
+  }
+  .tts-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.2rem 0.4rem;
+    color: var(--accent);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    transition: background 0.15s, border-color 0.15s;
+    vertical-align: middle;
+  }
+  .tts-btn:hover {
+    background: var(--bg-hover, rgba(0, 0, 0, 0.05));
+    border-color: var(--accent);
   }
   .entry-lemma {
     font-size: 1.75rem;
@@ -169,6 +215,25 @@
     font-size: 1.05rem;
     line-height: 1.4;
     margin-bottom: 0.5rem;
+  }
+  .example-item {
+    font-size: 0.95rem;
+    line-height: 1.4;
+    color: var(--text-h);
+  }
+  .tts-mini-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    vertical-align: middle;
+    padding: 0 0.2rem;
+    transition: color 0.15s;
+  }
+  .tts-mini-btn:hover {
+    color: var(--accent);
   }
   .sense-num {
     font-weight: 700;

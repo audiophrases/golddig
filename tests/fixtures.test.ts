@@ -11,7 +11,7 @@ describe('Fixtures and Schema Validation', () => {
     const manifest = JSON.parse(raw);
 
     expect(manifest.id).toBeDefined();
-    expect(manifest.languages).toEqual(expect.arrayContaining(['en', 'ca', 'fr', 'de', 'es']));
+    expect(manifest.languages).toEqual(expect.arrayContaining(['en', 'ca', 'fr', 'de', 'es', 'ary', 'zh']));
     expect(manifest.sources.length).toBeGreaterThanOrEqual(1);
 
     for (const src of manifest.sources) {
@@ -68,6 +68,8 @@ describe('Fixtures and Schema Validation', () => {
     expect(languagesFound.has('es')).toBe(true);
     expect(languagesFound.has('fr')).toBe(true);
     expect(languagesFound.has('de')).toBe(true);
+    expect(languagesFound.has('ary')).toBe(true);
+    expect(languagesFound.has('zh')).toBe(true);
 
     // Collision check lemmas are present
     expect(lemmas.has('ano')).toBe(true);
@@ -75,5 +77,8 @@ describe('Fixtures and Schema Validation', () => {
     expect(lemmas.has('col·lecció')).toBe(true);
     expect(lemmas.has('cœur')).toBe(true);
     expect(lemmas.has('Straße')).toBe(true);
+    expect(lemmas.has('hola')).toBe(true);
+    expect(lemmas.has('سلام')).toBe(true);
+    expect(lemmas.has('你好')).toBe(true);
   });
 });

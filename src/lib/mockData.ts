@@ -7,14 +7,110 @@ export const MOCK_PACKS: PackInfo[] = [
     id: 'vertical-slice',
     name: 'Multi-lingual Core (5 Languages)',
     version: '0.1.0',
-    languages: ['en', 'ca', 'es', 'fr', 'de'],
+    languages: ['en', 'ca', 'es', 'fr', 'de', 'ary', 'zh'],
     path: 'packs/vertical-slice.sqlite',
     enabled: true,
-    entry_count: 7,
+    entry_count: 10,
   },
 ];
 
 export const MOCK_ENTRIES: Record<string, EntryRecord> = {
+  'es:hola': {
+    id: 'es:hola',
+    language: 'es',
+    lemma: 'hola',
+    pos: 'interjection',
+    pronunciations: [{ ipa: '/ˈo.la/', type: 'ipa', source_id: 'wiktionary-core' }],
+    senses: [
+      {
+        id: 'es:hola:s1',
+        definition: 'Fórmula habitual de salutación o saludo amistoso al encontrarse con alguien.',
+        examples: [
+          {
+            text: '¡Hola! ¿Cómo estás hoy?',
+            translation: 'Hello! How are you today?',
+            source_id: 'tatoeba-examples',
+          },
+        ],
+        translations: [
+          { target_lang: 'en', text: 'hello', source_id: 'wiktionary-core' },
+          { target_lang: 'ca', text: 'hola', source_id: 'wiktionary-core' },
+          { target_lang: 'fr', text: 'salut', source_id: 'wiktionary-core' },
+        ],
+        synonyms: ['saludos', 'buenas'],
+        collocations: ['decir hola', 'hola y adiós'],
+        source_id: 'wiktionary-core',
+      },
+    ],
+    forms: [],
+  },
+  'ary:salam': {
+    id: 'ary:salam',
+    language: 'ary',
+    lemma: 'سلام',
+    pos: 'interjection',
+    pronunciations: [{ ipa: '/sa.laːm/', type: 'ipa', source_id: 'wiktionary-core' }],
+    senses: [
+      {
+        id: 'ary:salam:s1',
+        definition: 'تحية د السلام، كيتݣال فالتلاقية والوداع (Peace; hello, hi, greeting used upon meeting or departing).',
+        examples: [
+          {
+            text: 'سلام، كيدير لاباس عليك؟ (Salam, kidayr labas 3lik?)',
+            translation: 'Hello, how are you doing?',
+            source_id: 'wiktionary-core',
+          },
+        ],
+        translations: [
+          { target_lang: 'en', text: 'peace; hello; hi', source_id: 'wiktionary-core' },
+          { target_lang: 'es', text: 'hola', source_id: 'wiktionary-core' },
+          { target_lang: 'fr', text: 'salut', source_id: 'wiktionary-core' },
+        ],
+        synonyms: ['أهلا', 'مرحبا'],
+        collocations: ['سلام عليكم (salam 3likom)', 'رد السلام'],
+        source_id: 'wiktionary-core',
+      },
+    ],
+    forms: [
+      { form: 'salam', type: 'romanization', source_id: 'wiktionary-core' },
+      { form: 'ssalamu 3likom', type: 'greeting', source_id: 'wiktionary-core' },
+    ],
+  },
+  'zh:nihao': {
+    id: 'zh:nihao',
+    language: 'zh',
+    lemma: '你好',
+    pos: 'phrase',
+    pronunciations: [
+      { ipa: '/ni²¹⁴⁻²¹¹ xɑʊ̯²¹⁴⁻²¹⁽⁴⁾/', type: 'ipa', source_id: 'wiktionary-core' },
+      { ipa: 'nǐ hǎo', type: 'pinyin', source_id: 'wiktionary-core' },
+    ],
+    senses: [
+      {
+        id: 'zh:nihao:s1',
+        definition: '问候语，用于见面时打招呼 (Hello, how do you do; common standard polite greeting).',
+        examples: [
+          {
+            text: '你好，很高兴认识你！ (Nǐ hǎo, hěn gāoxìng rènshì nǐ!)',
+            translation: 'Hello, very pleased to meet you!',
+            source_id: 'wiktionary-core',
+          },
+        ],
+        translations: [
+          { target_lang: 'en', text: 'hello; hi; how do you do', source_id: 'wiktionary-core' },
+          { target_lang: 'es', text: 'hola', source_id: 'wiktionary-core' },
+          { target_lang: 'ca', text: 'hola', source_id: 'wiktionary-core' },
+        ],
+        synonyms: ['您好', '哈喽'],
+        collocations: ['问你好', '说你好'],
+        source_id: 'wiktionary-core',
+      },
+    ],
+    forms: [
+      { form: 'nǐhǎo', type: 'pinyin', source_id: 'wiktionary-core' },
+      { form: 'nihao', type: 'transcription', source_id: 'wiktionary-core' },
+    ],
+  },
   'en:light': {
     id: 'en:light',
     language: 'en',
@@ -232,26 +328,81 @@ export function mockSuggest(query: string): SearchSuggestion[] {
 
   for (const [id, entry] of Object.entries(MOCK_ENTRIES)) {
     const lemmaLower = entry.lemma.toLowerCase();
-    if (lemmaLower === q) {
-      results.unshift({
-        entry_id: id,
-        lemma: entry.lemma,
-        language: entry.language,
-        pos: entry.pos,
-        matched_term: entry.lemma,
-        match_type: 'exact',
-      });
-    } else if (lemmaLower.startsWith(q)) {
-      results.push({
-        entry_id: id,
-        lemma: entry.lemma,
-        language: entry.language,
-        pos: entry.pos,
-        matched_term: entry.lemma,
-        match_type: 'prefix',
-      });
+    let isWildcard = q.includes('?') || q.includes('*');
+    let isPhrase = q.includes(' ') && !isWildcard;
+
+    let matched = false;
+
+    if (isWildcard) {
+      // Regex conversion: ? -> ., * -> .*
+      const regexStr = '^' + q.replace(/\?/g, '.').replace(/\*/g, '.*') + '$';
+      const re = new RegExp(regexStr, 'i');
+      if (re.test(entry.lemma)) {
+        results.push({
+          entry_id: id,
+          lemma: entry.lemma,
+          language: entry.language,
+          pos: entry.pos,
+          matched_term: entry.lemma,
+          match_type: 'wildcard',
+        });
+        matched = true;
+      }
+    } else if (isPhrase) {
+      // Search lemma or examples for phrase
+      if (lemmaLower.includes(q)) {
+        results.push({
+          entry_id: id,
+          lemma: entry.lemma,
+          language: entry.language,
+          pos: entry.pos,
+          matched_term: entry.lemma,
+          match_type: 'phrase',
+        });
+        matched = true;
+      } else {
+        const foundInExamples = entry.senses.some((s) =>
+          s.examples?.some((ex) => ex.text.toLowerCase().includes(q) || ex.translation?.toLowerCase().includes(q))
+        );
+        if (foundInExamples) {
+          results.push({
+            entry_id: id,
+            lemma: entry.lemma,
+            language: entry.language,
+            pos: entry.pos,
+            matched_term: entry.lemma,
+            match_type: 'phrase',
+          });
+          matched = true;
+        }
+      }
     } else {
-      // Check forms
+      // Check exact lemma match
+      if (lemmaLower === q) {
+        results.unshift({
+          entry_id: id,
+          lemma: entry.lemma,
+          language: entry.language,
+          pos: entry.pos,
+          matched_term: entry.lemma,
+          match_type: 'lemma',
+        });
+        matched = true;
+      } else if (lemmaLower.startsWith(q)) {
+        results.push({
+          entry_id: id,
+          lemma: entry.lemma,
+          language: entry.language,
+          pos: entry.pos,
+          matched_term: entry.lemma,
+          match_type: 'lemma',
+        });
+        matched = true;
+      }
+    }
+
+    // Check forms and pronunciations / transcriptions (pinyin / romanization)
+    if (!matched && entry.forms) {
       for (const f of entry.forms) {
         if (f.form.toLowerCase().startsWith(q)) {
           results.push({
@@ -261,6 +412,23 @@ export function mockSuggest(query: string): SearchSuggestion[] {
             pos: entry.pos,
             matched_term: f.form,
             match_type: 'form',
+          });
+          matched = true;
+          break;
+        }
+      }
+    }
+
+    if (!matched && entry.pronunciations) {
+      for (const p of entry.pronunciations) {
+        if (p.ipa.toLowerCase().replace(/[\s\d]/g, '').startsWith(q.replace(/[\s\d]/g, ''))) {
+          results.push({
+            entry_id: id,
+            lemma: entry.lemma,
+            language: entry.language,
+            pos: entry.pos,
+            matched_term: p.ipa,
+            match_type: 'transcription',
           });
           break;
         }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { EntryRecord, PackInfo, SearchSuggestion } from './lib/types';
+  import { MOCK_ENTRIES, MOCK_PACKS, mockSuggest } from './lib/mockData';
   import EntryView from './lib/components/EntryView.svelte';
 
   let query = $state('');
@@ -12,7 +13,17 @@
   let debounceTimer: ReturnType<typeof setTimeout>;
 
   async function callTauri<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
-    // Check if running inside Tauri window
+    // 1. Try official @tauri-apps/api/core if available
+    try {
+      const core = await import('@tauri-apps/api/core');
+      if (typeof core.invoke === 'function') {
+        return await core.invoke<T>(cmd, args);
+      }
+    } catch {
+      // Not in Tauri or module not resolvable
+    }
+
+    // 2. Try window.__TAURI__ globals
     const w = window as unknown as {
       __TAURI__?: { core?: { invoke: (cmd: string, args: unknown) => Promise<T> } };
       __TAURI_INTERNALS__?: { invoke: (cmd: string, args: unknown) => Promise<T> };
@@ -23,8 +34,24 @@
     if (w.__TAURI_INTERNALS__?.invoke) {
       return await w.__TAURI_INTERNALS__.invoke(cmd, args);
     }
-    // Fallback for browser testing or mock mode
-    throw new Error('Tauri core runtime not detected');
+
+    // 3. Graceful browser preview fallback (for testing in Chrome / edge / dev server without Tauri wrapper)
+    if (cmd === 'list_packs') {
+      return MOCK_PACKS as unknown as T;
+    }
+    if (cmd === 'toggle_pack') {
+      return true as unknown as T;
+    }
+    if (cmd === 'suggest') {
+      const q = (args.query as string) || '';
+      return mockSuggest(q) as unknown as T;
+    }
+    if (cmd === 'get_entry') {
+      const entryId = (args.entryId as string) || '';
+      return (MOCK_ENTRIES[entryId] || null) as unknown as T;
+    }
+
+    throw new Error(`Tauri core runtime not detected and no mock handler for command: ${cmd}`);
   }
 
   async function refreshPacks() {

@@ -1,13 +1,14 @@
 # Data and generated indexes
 /data/
-/packs/
-*.sqlite
+/packs/*
+!/packs/vertical-slice.sqlite
 *.sqlite3
 *.db
 *.jsonl
 *.jsonl.gz
 *.tar.bz2
 *.tar.xz
+
 
 # Rust
 /target/

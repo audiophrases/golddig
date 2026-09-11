@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GolddigPackManifest",
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "version",
+    "schema_version",
+    "languages",
+    "created_at",
+    "sources",
+    "license"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "name": { "type": "string" },
+    "version": { "type": "string" },
+    "schema_version": { "type": "integer" },
+    "languages": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "created_at": { "type": "string" },
+    "license": { "type": "string" },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "url", "license", "attribution"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "url": { "type": "string" },
+          "license": { "type": "string" },
+          "attribution": { "type": "string" }
+        }
+      }
+    }
+  }
+}

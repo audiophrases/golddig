@@ -1,0 +1,32 @@
+{
+  "id": "golddig-vertical-slice-core",
+  "name": "Golddig Vertical Slice Core Fixture Pack",
+  "version": "0.1.0",
+  "schema_version": 1,
+  "languages": ["en-US", "ca", "fr", "de", "es"],
+  "created_at": "2026-09-11T12:00:00Z",
+  "license": "CC-BY-SA-4.0",
+  "sources": [
+    {
+      "id": "wiktionary-core",
+      "name": "Wiktionary / Wiktextract / Kaikki",
+      "url": "https://kaikki.org/dictionary/",
+      "license": "CC BY-SA 4.0",
+      "attribution": "Wiktionary contributors via Kaikki.org"
+    },
+    {
+      "id": "tatoeba-examples",
+      "name": "Tatoeba Project",
+      "url": "https://tatoeba.org",
+      "license": "CC BY 2.0 FR",
+      "attribution": "Tatoeba contributors"
+    },
+    {
+      "id": "softcatala-ca",
+      "name": "Softcatalà Recursos Lingüístics",
+      "url": "https://www.softcatala.org",
+      "license": "CC BY-SA 4.0",
+      "attribution": "Associació Softcatalà"
+    }
+  ]
+}

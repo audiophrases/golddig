@@ -13,7 +13,7 @@
 
 ## Data and licensing
 
-- Never commit downloaded dictionary dumps, generated databases, or bulk audio.
+- Never commit downloaded dictionary dumps, generated databases, or bulk audio (except small authored test fixtures like `packs/vertical-slice.sqlite`).
 - Every importer must record source URL, source version/date, retrieval date, content hash, license identifier/text URL, attribution, transformation recipe version, and output hash.
 - Never assume a project-wide license covers every record or media file. Audio and FreeDict dictionaries can have per-item/per-dictionary terms.
 - Do not redistribute a data pack until its license and attribution path are verified.

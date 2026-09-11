@@ -68,9 +68,15 @@ Install the frontend dependencies and run the validation commands:
 ```sh
 npm install
 npm run check
+npm run test
 npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
+cargo run --manifest-path src-tauri/Cargo.toml --bin golddig-bench
 ```
+
+## Benchmarks
+
+See [`docs/benchmarks/vertical-slice.md`](docs/benchmarks/vertical-slice.md) for latency measurements of the SQLite/Rust engine.
 
 Start the desktop application in development mode with `npm run tauri dev`.
 

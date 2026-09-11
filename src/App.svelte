@@ -11,9 +11,15 @@
 
   async function callTauri<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
     // Check if running inside Tauri window
-    const w = window as unknown as { __TAURI__?: { core?: { invoke: (cmd: string, args: unknown) => Promise<T> } } };
+    const w = window as unknown as {
+      __TAURI__?: { core?: { invoke: (cmd: string, args: unknown) => Promise<T> } };
+      __TAURI_INTERNALS__?: { invoke: (cmd: string, args: unknown) => Promise<T> };
+    };
     if (w.__TAURI__?.core?.invoke) {
       return await w.__TAURI__.core.invoke(cmd, args);
+    }
+    if (w.__TAURI_INTERNALS__?.invoke) {
+      return await w.__TAURI_INTERNALS__.invoke(cmd, args);
     }
     // Fallback for browser testing or mock mode
     throw new Error('Tauri core runtime not detected');

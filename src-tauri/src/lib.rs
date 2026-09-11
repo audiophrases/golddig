@@ -1,3 +1,4 @@
+pub mod importers;
 pub mod model;
 pub mod normalization;
 pub mod pack;

@@ -6,6 +6,16 @@ export interface SourceMeta {
   attribution: string;
 }
 
+export interface PackInfo {
+  id: string;
+  name: string;
+  version: string;
+  languages: string[];
+  path: string;
+  enabled: boolean;
+  entry_count: number;
+}
+
 export interface PronunciationRecord {
   ipa: string;
   type: string;

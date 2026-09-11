@@ -1,15 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { EntryRecord, SearchSuggestion } from './lib/types';
+  import type { EntryRecord, PackInfo, SearchSuggestion } from './lib/types';
   import EntryView from './lib/components/EntryView.svelte';
 
   let query = $state('');
   let suggestions = $state<SearchSuggestion[]>([]);
   let selectedEntry = $state<EntryRecord | null>(null);
-  let statusMessage = $state('Ready. Local dictionary pack loaded.');
+  let statusMessage = $state('Ready. Local dictionary packs loaded.');
+  let packs = $state<PackInfo[]>([]);
+  let showPacksModal = $state(false);
   let debounceTimer: ReturnType<typeof setTimeout>;
 
-  async function callTauri<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
+  async function callTauri<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
     // Check if running inside Tauri window
     const w = window as unknown as {
       __TAURI__?: { core?: { invoke: (cmd: string, args: unknown) => Promise<T> } };
@@ -23,6 +25,27 @@
     }
     // Fallback for browser testing or mock mode
     throw new Error('Tauri core runtime not detected');
+  }
+
+  async function refreshPacks() {
+    try {
+      const p = await callTauri<PackInfo[]>('list_packs');
+      packs = p;
+    } catch {
+      // In web browser dev/preview mode without native Tauri
+    }
+  }
+
+  async function togglePack(packId: string, currentEnabled: boolean) {
+    try {
+      await callTauri<boolean>('toggle_pack', { packId, enabled: !currentEnabled });
+      await refreshPacks();
+      if (query.trim()) {
+        handleInput();
+      }
+    } catch (err) {
+      statusMessage = `Failed to toggle pack: ${err}`;
+    }
   }
 
   function handleInput() {
@@ -58,21 +81,63 @@
   }
 
   onMount(() => {
-    // Initial probe
+    refreshPacks();
   });
 </script>
 
 <main class="app-layout">
   <header class="app-header">
-    <div class="search-bar">
-      <input
-        type="search"
-        placeholder="Type a word (en, ca, es, fr, de)..."
-        bind:value={query}
-        oninput={handleInput}
-        aria-label="Dictionary search"
-      />
+    <div class="header-top">
+      <div class="search-bar">
+        <input
+          type="search"
+          placeholder="Type a word (en, ca, es, fr, de)..."
+          bind:value={query}
+          oninput={handleInput}
+          aria-label="Dictionary search"
+        />
+      </div>
+      <button
+        class="packs-btn"
+        onclick={() => (showPacksModal = !showPacksModal)}
+        aria-label="Manage dictionary packs"
+      >
+        Packs ({packs.filter((p) => p.enabled).length}/{packs.length})
+      </button>
     </div>
+
+    {#if showPacksModal}
+      <div class="packs-panel">
+        <div class="packs-header">
+          <h3>Active Dictionary Packs</h3>
+          <button class="close-btn" onclick={() => (showPacksModal = false)}>✕</button>
+        </div>
+        {#if packs.length === 0}
+          <p class="no-packs">No external packs loaded. Base fixture active.</p>
+        {:else}
+          <ul class="packs-list">
+            {#each packs as p}
+              <li class="pack-item">
+                <label class="pack-label">
+                  <input
+                    type="checkbox"
+                    checked={p.enabled}
+                    onchange={() => togglePack(p.id, p.enabled)}
+                  />
+                  <div class="pack-details">
+                    <span class="pack-name">{p.name} (v{p.version})</span>
+                    <span class="pack-meta">
+                      {p.entry_count} entries · [{p.languages.join(', ')}]
+                    </span>
+                  </div>
+                </label>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    {/if}
+
     <div class="status-bar" role="status">
       <span>{statusMessage}</span>
     </div>
@@ -128,6 +193,85 @@
   .app-header {
     border-bottom: 1px solid var(--border);
     padding-bottom: 0.75rem;
+  }
+  .header-top {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+  }
+  .search-bar {
+    flex: 1;
+  }
+  .packs-btn {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 0.5rem 0.85rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    white-space: nowrap;
+  }
+  .packs-btn:hover {
+    border-color: var(--accent);
+  }
+  .packs-panel {
+    margin-top: 0.75rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--code-bg);
+  }
+  .packs-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+  }
+  .packs-header h3 {
+    margin: 0;
+    font-size: 0.95rem;
+  }
+  .close-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+  }
+  .packs-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .pack-item {
+    display: flex;
+    align-items: center;
+  }
+  .pack-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+  }
+  .pack-details {
+    display: flex;
+    flex-direction: column;
+  }
+  .pack-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+  .pack-meta {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+  .no-packs {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin: 0.25rem 0;
   }
   .search-bar input {
     width: 100%;

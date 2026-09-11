@@ -1,5 +1,50 @@
 # Initial roadmap
 
+> ## Current state, and what is actually next
+>
+> Phases 0 and 1 are done. Phase 2 is partly done. The phase descriptions below are the
+> original plan and still read as aspirational in places — this block is the honest status.
+>
+> **Working:** Tauri 2 desktop app; Rust core; Svelte 5 text-first UI with keyboard
+> navigation; seven buildable language packs (en, ca, es, fr, de, ary, zh) plus a committed
+> test fixture; streaming Kaikki importer carrying definitions, IPA with region tags, audio
+> URLs, inflections, synonyms, related/derived terms, romanized transcriptions and register
+> labels; a Tatoeba example merger; globally ranked multi-pack search with exact, prefix,
+> wildcard (`?`/`*`, including suffix patterns via a reversed-term index), loose
+> diacritic-folded and content tiers; per-pack enable/disable; CI on Linux and Windows.
+>
+> **The four next pieces, in priority order:**
+>
+> 1. **FTS5 for content search.** Phrase lookup currently falls back to `LIKE` over the JSON
+>    payload — ~680 ms on a 198k-entry pack. A contentless FTS5 index over definitions and
+>    examples would make it a fast ranked tier instead of a slow last resort, and is the one
+>    piece of `docs/architecture.md` worth actually building.
+> 2. **Real bilingual translations.** English Wiktionary only publishes translation tables on
+>    *English* lemmas, so the `en` pack supplies english→X and nothing supplies X→Y. The fix
+>    is a genuinely bilingual source:
+>    - **FreeDict** (<https://freedict.org/>) — TEI XML, many pairs including eng↔spa,
+>      eng↔fra, eng↔deu, eng↔cat. Licences vary **per dictionary**; check each.
+>    - **Apertium** bilingual dictionaries (<https://github.com/apertium>) — GPL, strong
+>      ca↔es coverage, built for exactly this.
+>    - **CC-CEDICT** (<https://cc-cedict.org/>) — CC BY-SA 4.0, ~120k entries, the standard
+>      English↔Mandarin source with Pinyin. Better for zh than Wiktionary alone.
+> 3. **Statistical collocations.** What the UI labels "Commonly used with" is currently
+>    Wiktionary related/derived/coordinate terms — editorial relations, *not* corpus
+>    statistics. Real collocations need co-occurrence counts from a corpus: the
+>    **Leipzig Corpora Collection** (<https://wortschatz.uni-leipzig.de/en/download>)
+>    publishes per-language co-occurrence tables, licence per corpus. Until then the label
+>    overstates what the data is and should be read as "related words".
+> 4. **Offline neural pronunciation.** The speaker buttons are the platform Web Speech API,
+>    which has no Catalan or Moroccan Arabic voice on Windows and whose best voices are
+>    cloud-only. Two honest routes: ship the Wiktionary recordings the importer already
+>    preserves in `PronunciationRecord.audio`, or bundle **Piper** ONNX voices
+>    (<https://github.com/rhasspy/piper>, MIT, ~20–60 MB per voice) invoked from Rust for
+>    genuinely offline synthesis.
+>
+> **Also outstanding:** Open English WordNet and OMW for synsets; `wordfreq` for commonness;
+> `.gdpkg` packaging with signing and atomic activation; StarDict/DSL/Dictd/MDict importers;
+> history and bookmarks; a writable catalog database.
+
 ## Phase 0 — decisions and legal/data groundwork
 
 - Confirm application license (recommended candidates: GPL-3.0-or-later or MPL-2.0).

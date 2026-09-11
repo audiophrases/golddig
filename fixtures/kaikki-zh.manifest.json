@@ -1,18 +1,20 @@
 {
-  "id": "kaikki-mandarin-chinese",
-  "name": "Kaikki Wiktionary Mandarin Chinese",
-  "version": "2026.09.06",
+  "id": "kaikki-zh",
+  "name": "Kaikki English Wiktionary (Chinese entries) — Chinese",
+  "version": "2026.09.11",
   "schema_version": 1,
-  "languages": ["zh"],
-  "created_at": "2026-09-11T12:00:00Z",
-  "license": "CC-BY-SA-3.0",
+  "languages": [
+    "zh"
+  ],
+  "created_at": "2026-09-11T21:46:38Z",
+  "license": "CC-BY-SA-4.0",
   "sources": [
     {
       "id": "kaikki-wiktionary",
-      "name": "Kaikki.org Wiktionary Extracted Dictionary",
-      "url": "https://kaikki.org/",
-      "license": "CC-BY-SA-3.0",
-      "attribution": "Extracted from Wiktionary via Wiktextract and Kaikki.org"
+      "name": "Kaikki.org Wiktextract — English Wiktionary (Chinese entries)",
+      "url": "https://kaikki.org/dictionary/Chinese/kaikki.org-dictionary-Chinese.jsonl",
+      "license": "CC-BY-SA-4.0",
+      "attribution": "English Wiktionary (Chinese entries) contributors, extracted via Wiktextract and published by Kaikki.org. Retrieved Wed, 09 Sep 2026 20:43:14 GMT. Source SHA-256 (first 64 MB): 69f89f707384dd5677b66f7ec0f1c5a4bc427d59800149ae22b90e3a33b1b769"
     }
   ]
 }

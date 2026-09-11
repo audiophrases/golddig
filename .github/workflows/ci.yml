@@ -1,0 +1,85 @@
+# Continuous integration for Golddig.
+#
+# The repository had no CI of any kind, so every "all tests passing" claim rested on an
+# agent reporting on its own work in a single working tree. Run on a clean checkout, this
+# would have failed on every commit in the history: the test fixtures were gitignored, so
+# six Rust tests and the whole Vitest suite opened files that do not exist in a clone.
+#
+# `npm run build` runs before the Rust steps on purpose — tauri::generate_context! reads
+# the built frontendDist, so `cargo test` cannot even link without dist/ present.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux WebKit dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run check
+
+      - name: Frontend tests
+        run: npm run test
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      # Builds a real pack (Darija, ~6 MB) end to end before the tests run, so
+      # test_shipped_packs_are_structurally_sound checks a genuine multi-thousand-entry
+      # artifact rather than only the committed 10-entry fixture. This step also exercises
+      # the coverage gate that catches a pack which would ship 0% of a feature.
+      - name: Build a real dictionary pack
+        run: python scripts/fetch_and_build_pack.py ary
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml

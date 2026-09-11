@@ -1,0 +1,20 @@
+{
+  "id": "kaikki-de",
+  "name": "Kaikki English Wiktionary (German entries) — German",
+  "version": "2026.09.11",
+  "schema_version": 1,
+  "languages": [
+    "de"
+  ],
+  "created_at": "2026-09-11T21:34:36Z",
+  "license": "CC-BY-SA-4.0",
+  "sources": [
+    {
+      "id": "kaikki-wiktionary",
+      "name": "Kaikki.org Wiktextract — English Wiktionary (German entries)",
+      "url": "https://kaikki.org/dictionary/German/kaikki.org-dictionary-German.jsonl",
+      "license": "CC-BY-SA-4.0",
+      "attribution": "English Wiktionary (German entries) contributors, extracted via Wiktextract and published by Kaikki.org. Retrieved Wed, 09 Sep 2026 20:53:55 GMT. Source SHA-256 (first 64 MB): c87c1865f3f139cb1dbb6a3e3011420157dfc0eccc65b4f92fe35ee4553e8676"
+    }
+  ]
+}

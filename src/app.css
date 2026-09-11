@@ -1,12 +1,64 @@
+/* Golddig global stylesheet.
+ *
+ * This file previously held the unmodified `npm create tauri-app` scaffold CSS and
+ * defined none of the custom properties the UI paints with: all nine --tokens that
+ * App.svelte and EntryView.svelte reference resolved to nothing. Its leftover rules
+ * also leaked into the app — a 4.5rem Georgia `h1` styled the headword, and a generic
+ * `input { width: 100% }` stretched the pack checkboxes.
+ *
+ * Everything below is the real design surface. Keep colours as tokens so both themes
+ * stay in sync, and scope element selectors so nothing leaks again.
+ */
+
 :root {
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #282620;
-  background: #f7f5ef;
+  /* Surfaces and text */
+  --bg: #fbfbfa;
+  --surface: #ffffff;
+  --text: #24282b;
+  --text-h: #14181b;
+  --text-muted: #67737a;
+  --border: #dde3e6;
+  --code-bg: #f1f4f5;
+
+  /* One accent, used for focus, selection and source labels */
+  --accent: #0e5f63;
+  --accent-bg: #e2f0f0;
+
+  --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Consolas, monospace;
+
   color-scheme: light dark;
+  font-family: var(--font-ui);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15191b;
+    --surface: #1c2225;
+    --text: #dfe6e8;
+    --text-h: #f2f6f7;
+    --text-muted: #94a3a9;
+    --border: #2c3539;
+    --code-bg: #222a2d;
+    --accent: #5bb8b4;
+    --accent-bg: #18302f;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #15191b;
+  --surface: #1c2225;
+  --text: #dfe6e8;
+  --text-h: #f2f6f7;
+  --text-muted: #94a3a9;
+  --border: #2c3539;
+  --code-bg: #222a2d;
+  --accent: #5bb8b4;
+  --accent-bg: #18302f;
 }
 
 * {
@@ -14,123 +66,40 @@
 }
 
 body {
+  margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.55;
 }
 
-button,
-input {
+button {
   font: inherit;
-}
-
-main {
-  width: min(100% - 2.5rem, 46rem);
-  margin-inline: auto;
-  padding-block: clamp(3rem, 10vh, 7rem);
-}
-
-header {
-  padding-bottom: 2rem;
-  border-bottom: 1px solid #d9d4c7;
-}
-
-.eyebrow {
-  margin: 0 0 0.5rem;
-  color: #755b1d;
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-h1,
-h2,
-p {
-  margin-top: 0;
-}
-
-h1 {
-  margin-bottom: 0.75rem;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: clamp(2.75rem, 8vw, 4.5rem);
-  font-weight: 600;
-  letter-spacing: -0.04em;
-  line-height: 1;
-}
-
-.introduction {
-  max-width: 36rem;
-  margin-bottom: 0;
-  color: #615d52;
-  font-size: 1.0625rem;
-  line-height: 1.6;
-}
-
-section {
-  padding-top: 2rem;
-}
-
-h2 {
-  margin-bottom: 1.5rem;
-  font-size: 1rem;
-  font-weight: 650;
-}
-
-label {
-  display: block;
-  margin-bottom: 0.5rem;
-  font-size: 0.875rem;
-  font-weight: 650;
-}
-
-input {
-  width: 100%;
-  border: 1px solid #aaa394;
-  border-radius: 0.25rem;
-  padding: 0.8rem 0.9rem;
   color: inherit;
-  background: #fffefb;
-  outline: none;
 }
 
-input:focus-visible {
-  border-color: #755b1d;
-  box-shadow: 0 0 0 3px rgb(117 91 29 / 20%);
+/* Scoped to text entry only. The unscoped `input` rule this replaces also matched the
+   pack checkboxes and stretched them to full width. */
+input[type="search"],
+input[type="text"] {
+  font: inherit;
+  color: var(--text-h);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.5rem 0.7rem;
 }
 
-#pack-status {
-  margin: 0.75rem 0 0;
-  color: #696459;
-  font-size: 0.875rem;
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #e8e4da;
-    background: #1e1d1a;
-  }
-
-  header {
-    border-color: #454138;
-  }
-
-  .eyebrow {
-    color: #d2ad54;
-  }
-
-  .introduction,
-  #pack-status {
-    color: #bbb5a8;
-  }
-
-  input {
-    border-color: #625d52;
-    background: #27251f;
-  }
-
-  input:focus-visible {
-    border-color: #d2ad54;
-    box-shadow: 0 0 0 3px rgb(210 173 84 / 22%);
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
   }
 }

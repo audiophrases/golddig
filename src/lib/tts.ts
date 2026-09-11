@@ -1,16 +1,39 @@
-// tts.ts — Neural Edge voice synthesis for Golddig desktop and web dictionary lookup.
-// Prioritizes natural neural voices exposed by Microsoft Edge / WebView2 runtime.
-// Reusable implementation based on proven speech pipeline.
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+// Speech synthesis for Golddig headwords and examples.
+//
+// This is the browser Web Speech API (`window.speechSynthesis`) using whatever voices
+// the host platform exposes. It is NOT Microsoft Edge neural TTS, and an earlier version
+// of this file claimed to be: it only ranked voices by matching /natural|neural|online/
+// against their names. Two things follow from that, and the UI depends on both:
+//
+//   1. Edge's "… Online (Natural)" voices are injected by the Edge browser itself. A
+//      Tauri WebView2 window does not get them, so inside golddig.exe you hear the local
+//      SAPI voice. They are also cloud-synthesised, so they would need network — which
+//      the rest of the app deliberately never uses.
+//   2. Windows ships no Catalan and no Moroccan Arabic voice by default. Previously
+//      `speak()` would fall through with no voice selected and the platform would read
+//      Catalan text aloud in English. `voiceStatusFor()` now reports that instead, and
+//      the UI disables the button.
+//
+// For real offline neural audio the route is a bundled Piper (ONNX) voice per language
+// invoked from Rust, or shipping the Wiktionary recordings the importer now preserves in
+// PronunciationRecord.audio. Both are tracked in docs/roadmap.md, neither is this file.
 
 let voices: SpeechSynthesisVoice[] = [];
 const listeners = new Set<(v: SpeechSynthesisVoice[]) => void>();
 
 let voicesSettled = false;
-let settleTimer: any = null;
+let settleTimer: ReturnType<typeof setTimeout> | null = null;
 const readyWaiters = new Set<() => void>();
 
-function haveNaturalVoice(): boolean {
-  if (typeof window === 'undefined') return false;
+export function speechAvailable(): boolean {
+  return typeof window !== 'undefined' && !!window.speechSynthesis;
+}
+
+function haveHighQualityVoice(): boolean {
   return voices.some((v) => /natural|online|neural/i.test(v.name || ''));
 }
 
@@ -23,43 +46,37 @@ function markVoicesSettled() {
 }
 
 function whenVoicesReady(cb: () => void) {
-  if (typeof window === 'undefined' || !window.speechSynthesis) {
-    return;
-  }
-  if (voicesSettled) {
-    cb();
-  } else {
-    readyWaiters.add(cb);
-  }
+  if (!speechAvailable()) return;
+  if (voicesSettled) cb();
+  else readyWaiters.add(cb);
 }
 
 function refresh() {
-  if (typeof window === 'undefined' || !window.speechSynthesis) return;
+  if (!speechAvailable()) return;
   voices = window.speechSynthesis.getVoices();
   listeners.forEach((cb) => cb(voices));
-  if (haveNaturalVoice()) {
-    markVoicesSettled();
-  }
+  // Edge publishes its online voices a moment after load; settle early if they arrive.
+  if (haveHighQualityVoice()) markVoicesSettled();
 }
 
-if (typeof window !== 'undefined' && window.speechSynthesis) {
+if (speechAvailable()) {
   refresh();
   window.speechSynthesis.onvoiceschanged = refresh;
   settleTimer = setTimeout(markVoicesSettled, 2000);
 }
 
+/** Prefer cloud "natural" voices where the host actually exposes them. */
 function rankVoice(v: SpeechSynthesisVoice): number {
   const n = v.name || '';
-  let s = 0;
-  if (/natural|neural/i.test(n)) s += 10; // High-quality Edge natural neural voices
-  if (/online/i.test(n)) s += 5;
-  if (/microsoft/i.test(n)) s += 3;
-  if (/google/i.test(n)) s += 2;
-  if (!v.localService) s += 1;
-  return s;
+  let score = 0;
+  if (/natural|neural/i.test(n)) score += 10;
+  if (/online/i.test(n)) score += 5;
+  if (/microsoft/i.test(n)) score += 3;
+  if (/google/i.test(n)) score += 2;
+  if (!v.localService) score += 1;
+  return score;
 }
 
-// Language prefix mappings for 2-letter codes or specialized codes
 const LANG_MAP: Record<string, string[]> = {
   en: ['en-US', 'en-GB', 'en'],
   ca: ['ca-ES', 'ca'],
@@ -72,29 +89,87 @@ const LANG_MAP: Record<string, string[]> = {
   cmn: ['zh-CN', 'zh-TW', 'zh'],
 };
 
-export function getVoicesForLang(langCode: string): SpeechSynthesisVoice[] {
-  const targets = LANG_MAP[langCode.toLowerCase()] || [langCode.toLowerCase()];
-  const primaryPrefix = targets[0].slice(0, 2).toLowerCase();
+/** Human-readable language name for status messages. */
+const LANG_NAME: Record<string, string> = {
+  en: 'English',
+  ca: 'Catalan',
+  es: 'Spanish',
+  fr: 'French',
+  de: 'German',
+  ary: 'Moroccan Arabic',
+  ar: 'Arabic',
+  zh: 'Chinese',
+  cmn: 'Chinese',
+};
 
+export function getVoicesForLang(langCode: string): SpeechSynthesisVoice[] {
+  const code = langCode.toLowerCase();
+  const targets = LANG_MAP[code] || [code];
+  // Match only the requested language. The previous implementation also accepted any
+  // voice whose tag merely began with the same two letters as the primary target, which
+  // combined with a null result let the platform substitute its default English voice.
   return voices
     .filter((v) => {
-      const vLang = (v.lang || '').toLowerCase();
-      return targets.some((t) => vLang === t.toLowerCase() || vLang.startsWith(t.toLowerCase())) ||
-        vLang.startsWith(primaryPrefix);
+      const vLang = (v.lang || '').toLowerCase().replace('_', '-');
+      return targets.some((t) => {
+        const tl = t.toLowerCase();
+        return vLang === tl || vLang.startsWith(`${tl}-`);
+      });
     })
     .sort((a, b) => rankVoice(b) - rankVoice(a) || a.name.localeCompare(b.name));
 }
 
 export function getBestVoice(langCode: string): SpeechSynthesisVoice | null {
-  const list = getVoicesForLang(langCode);
-  return list[0] || null;
+  return getVoicesForLang(langCode)[0] || null;
 }
 
-let keepAliveInterval: any = null;
+export type VoiceStatus =
+  | { kind: 'ready'; voiceName: string; cloud: boolean }
+  | { kind: 'unsupported'; message: string }
+  | { kind: 'no-voice'; message: string };
+
+/**
+ * Whether this language can actually be spoken here, and by what. The UI uses this to
+ * disable the speaker button rather than play the wrong language.
+ */
+export function voiceStatusFor(langCode: string): VoiceStatus {
+  if (!speechAvailable()) {
+    return { kind: 'unsupported', message: 'Speech synthesis is unavailable in this window' };
+  }
+  const voice = getBestVoice(langCode);
+  if (!voice) {
+    const name = LANG_NAME[langCode.toLowerCase()] || langCode;
+    return {
+      kind: 'no-voice',
+      message: `No ${name} speech voice is installed on this system`,
+    };
+  }
+  return { kind: 'ready', voiceName: voice.name, cloud: !voice.localService };
+}
+
+/** Subscribe to voice-list changes so the UI can re-evaluate button state. */
+export function onVoicesChanged(cb: (v: SpeechSynthesisVoice[]) => void): () => void {
+  listeners.add(cb);
+  cb(voices);
+  return () => listeners.delete(cb);
+}
+
+let keepAliveInterval: ReturnType<typeof setInterval> | null = null;
 let currentToken = 0;
 
-export function speak(text: string, langCode: string = 'en', voiceName?: string | null, rate: number = 0.95) {
-  if (typeof window === 'undefined' || !window.speechSynthesis || !text) return;
+/**
+ * Speaks `text` in `langCode`. Returns the status it acted on; callers can surface a
+ * `no-voice` result instead of silently producing the wrong language.
+ */
+export function speak(
+  text: string,
+  langCode: string = 'en',
+  voiceName?: string | null,
+  rate: number = 0.95
+): VoiceStatus {
+  if (!speechAvailable() || !text) {
+    return { kind: 'unsupported', message: 'Speech synthesis is unavailable in this window' };
+  }
 
   stopSpeaking();
   const token = ++currentToken;
@@ -102,46 +177,42 @@ export function speak(text: string, langCode: string = 'en', voiceName?: string 
   whenVoicesReady(() => {
     if (token !== currentToken) return;
 
-    const u = new SpeechSynthesisUtterance(text);
-    const targetTags = LANG_MAP[langCode.toLowerCase()] || ['en-US'];
-    u.lang = targetTags[0];
+    const explicit = voiceName ? voices.find((v) => v.name === voiceName) : null;
+    const voice = explicit || getBestVoice(langCode);
+    // Never speak without a matching voice — that is what read Catalan in English.
+    if (!voice) return;
 
-    let voice: SpeechSynthesisVoice | null = null;
-    if (voiceName) {
-      voice = voices.find((v) => v.name === voiceName) || null;
-    }
-    if (!voice) {
-      voice = getBestVoice(langCode);
-    }
-    if (voice) {
-      u.voice = voice;
-      u.lang = voice.lang;
-    }
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.voice = voice;
+    utterance.lang = voice.lang;
+    utterance.rate = Math.min(2, Math.max(0.5, rate));
+    utterance.pitch = 1.0;
 
-    u.rate = Math.min(2, Math.max(0.5, rate));
-    u.pitch = 1.0;
+    const clearKeepAlive = () => {
+      if (keepAliveInterval) clearInterval(keepAliveInterval);
+      keepAliveInterval = null;
+    };
+    utterance.onend = clearKeepAlive;
+    utterance.onerror = clearKeepAlive;
 
-    u.onend = () => clearInterval(keepAliveInterval);
-    u.onerror = () => clearInterval(keepAliveInterval);
+    window.speechSynthesis.speak(utterance);
 
-    window.speechSynthesis.speak(u);
-
-    // Keepalive for Chromium/Edge long-utterance bug
-    clearInterval(keepAliveInterval);
+    // Works around the Chromium/Edge bug that halts long utterances after ~15s.
+    clearKeepAlive();
     keepAliveInterval = setInterval(() => {
-      if (window.speechSynthesis && window.speechSynthesis.speaking) {
-        window.speechSynthesis.resume();
-      } else {
-        clearInterval(keepAliveInterval);
-      }
+      if (window.speechSynthesis?.speaking) window.speechSynthesis.resume();
+      else clearKeepAlive();
     }, 5000);
   });
+
+  return voiceStatusFor(langCode);
 }
 
 export function stopSpeaking() {
   currentToken++;
-  if (keepAliveInterval) clearInterval(keepAliveInterval);
-  if (typeof window !== 'undefined' && window.speechSynthesis) {
-    window.speechSynthesis.cancel();
+  if (keepAliveInterval) {
+    clearInterval(keepAliveInterval);
+    keepAliveInterval = null;
   }
+  if (speechAvailable()) window.speechSynthesis.cancel();
 }

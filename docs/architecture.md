@@ -2,6 +2,52 @@
 
 Status: **proposal for the first implementation spike**
 
+> ## What is actually built
+>
+> This document is a design proposal and large parts of it are not implemented. It was
+> cited as if it described the shipped system, so here is the real inventory.
+>
+> **Built:** Tauri 2 shell; Rust core with `rusqlite`; Svelte 5 + TypeScript UI; one
+> immutable SQLite file per pack; multi-pack discovery with per-pack enable/disable; a
+> streaming Kaikki/Wiktextract importer; a Tatoeba example merger; language-aware
+> normalization with loose keys; globally ranked multi-pack search with prefix, exact,
+> wildcard, loose and content tiers; the `golddig-pack` and `golddig-bench` CLIs.
+>
+> **Pack schema as built** — four tables, not the relational model described below:
+>
+> ```sql
+> manifest(key, value)                        -- the pack manifest, as JSON
+> sources(id, name, url, license, attribution)
+> entries(id, language, lemma, pos, data_json) -- the entry is a JSON payload
+> search_terms(entry_id, term, term_type, loose_key, language)
+>                                             -- term_type: lemma | form | transcription
+> ```
+>
+> **Not built.** Do not read these as delivered:
+>
+> - **FTS5.** No pack contains an FTS table. Lookup uses covering b-tree indexes over
+>   `search_terms` with half-open range probes. The `unicode61 remove_diacritics 0`
+>   configuration below is a proposal; diacritic handling is done in Rust instead, which is
+>   what `normalization.rs` is.
+> - **Relational senses.** There are no `sense`, `definition`, `translation`, `example`,
+>   `collocation`, `relation`, `pronunciation` or `provenance` tables. Those live inside
+>   `entries.data_json`.
+> - **`catalog.sqlite`.** No writable catalog, no global cross-pack term index, no history,
+>   no bookmarks. Pack state is in-memory and rebuilt at startup.
+> - **`.gdpkg` packages.** No transport archive, no signing, no side-by-side versions, no
+>   atomic activation, no rollback, no sideload flow. A pack is a bare `.sqlite` file.
+> - **Sandboxed import.** `golddig-pack` is a separate binary but runs unsandboxed with no
+>   archive-expansion or resource limits.
+> - **HTML sanitization.** Not needed yet: no importer emits markup. Required before any
+>   StarDict/DSL/MDict adapter lands.
+> - **StarDict, DSL, Dictd, MDict, XDXF, ZIM importers.** None exist.
+> - **Frequency and statistical collocations.** The `collocations` field holds Wiktionary
+>   related/derived/coordinate terms, which are editorial relations, not corpus statistics.
+>
+> Provenance is partial: each pack manifest records the source URL, the dump's
+> `Last-Modified` date and a SHA-256 of the downloaded file, and every sense carries a
+> `source_id`. There is no per-fact provenance row and no output hash.
+
 ## Recommendation
 
 Use **Tauri 2 + Rust + Svelte/TypeScript + SQLite FTS5**.

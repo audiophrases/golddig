@@ -1,15 +1,33 @@
-# Data and generated indexes
+# Dictionary packs and downloaded dumps
+#
+# Packs are generated artifacts, so none are committed — build them with
+# `python scripts/build_all_packs.py`. The one exception is the tiny authored
+# vertical-slice fixture, which the test suite and the installer both need.
+#
+# The 77 MB English pack was briefly un-ignored here. Generated binaries that large do not
+# belong in git without LFS (GitHub hard-rejects pushes over 100 MB, and the Chinese pack
+# is 69 MB), so it is ignored again and distributed as a release asset instead.
 /data/
 /packs/*
 !/packs/vertical-slice.sqlite
-!/packs/kaikki-english-core.sqlite
-conversation-export-*.txt
+*.sqlite-wal
+*.sqlite-shm
 *.sqlite3
-*.jsonl
 *.jsonl.gz
+*.jsonl.part
 *.tar.bz2
 *.tar.xz
 
+# Downloaded Kaikki dumps are hundreds of MB each. The small authored and sampled
+# fixtures below ARE committed: `*.jsonl` used to be ignored wholesale, which left six
+# Rust tests and the whole Vitest suite opening files that did not exist in a clone.
+/fixtures/*.jsonl
+!/fixtures/vertical-slice.entries.jsonl
+!/fixtures/kaikki-sample-ca.jsonl
+!/fixtures/kaikki-sample-en.jsonl
+
+# Working notes that are not part of the project
+conversation-export-*.txt
 
 # Rust
 /target/
@@ -20,6 +38,10 @@ conversation-export-*.txt
 /node_modules/
 /dist/
 /.svelte-kit/
+
+# Machine-specific Windows shortcut. Golddig.lnk embeds an absolute path to whoever
+# generated it; run launchers/create-shortcut.bat to make a correct local one.
+/launchers/Golddig.lnk
 
 # Local environment
 .env

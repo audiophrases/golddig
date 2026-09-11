@@ -21,12 +21,15 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; font-src 'self'; media-src 'self' https://upload.wikimedia.org; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; frame-src 'none'"
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "../packs/vertical-slice.sqlite": "packs/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
@@ -127,9 +131,40 @@ fn loose_french(s: &str) -> String {
     out
 }
 
+/// Decomposes to NFD and drops combining marks, so `fiancée` folds to `fiancee`
+/// and romanized transliterations such as `fās` / `filisṭīn` fold to `fas` / `filistin`.
+/// Arabic harakat are combining marks too, so this strips them as well.
+fn strip_marks(s: &str) -> String {
+    s.nfd()
+        .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
+        .collect()
+}
+
+/// Folds the standalone (non-combining) letters that carry no decomposition.
+fn fold_standalone(c: char, out: &mut String) -> bool {
+    match c {
+        'œ' => out.push_str("oe"),
+        'æ' => out.push_str("ae"),
+        'ß' => out.push_str("ss"),
+        'ø' => out.push('o'),
+        'ð' | 'đ' => out.push('d'),
+        'ł' => out.push('l'),
+        'þ' => out.push_str("th"),
+        'ı' => out.push('i'),
+        _ => return false,
+    }
+    true
+}
+
 fn loose_generic(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
+    // Baseline for English and every language without a dedicated arm: fold all
+    // diacritics so accent-free typing still finds accented headwords.
+    let decomposed = strip_marks(s);
+    let mut out = String::with_capacity(decomposed.len());
+    for c in decomposed.chars() {
+        if fold_standalone(c, &mut out) {
+            continue;
+        }
         if !c.is_ascii_punctuation() && !c.is_whitespace() {
             out.push(c);
         }
@@ -138,12 +173,14 @@ fn loose_generic(s: &str) -> String {
 }
 
 fn loose_arabic(s: &str) -> String {
-    // Strip Arabic diacritics / harakat and normalize alifs
+    // Strip Arabic diacritics / harakat, normalize alifs, and fold the macrons and
+    // underdots used by Latin transliterations of Darija.
+    let s = &strip_marks(s);
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
             // Harakat / Tashkeel
-            '\u{064B}'..='\u{065F}' | '\u{0670}' => {},
+            '\u{064B}'..='\u{065F}' | '\u{0670}' => {}
             // Normalize alif with hamza / madda to plain alif
             'أ' | 'إ' | 'آ' | 'ٱ' => out.push('ا'),
             // Normalize taa marbuta to haa or taa

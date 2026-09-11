@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +44,12 @@ pub struct PronunciationRecord {
     pub ipa: String,
     #[serde(rename = "type")]
     pub kind: String,
+    /// Region / register labels from the source, e.g. ["US"], ["Received Pronunciation"].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// Upstream recording URL, when the source provides one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<String>,
     pub source_id: String,
 }
 
@@ -55,6 +65,9 @@ pub struct SenseRecord {
     pub synonyms: Vec<String>,
     #[serde(default)]
     pub collocations: Vec<String>,
+    /// Register / domain labels from the source, e.g. ["informal"], ["chemistry"].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     pub source_id: String,
 }
 
@@ -62,6 +75,10 @@ pub struct SenseRecord {
 pub struct ExampleRecord {
     pub text: String,
     pub translation: Option<String>,
+    /// Latin transliteration of `text`, for scripts the reader may not decode
+    /// (Arabic, Chinese). Kaikki supplies this as `roman`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roman: Option<String>,
     pub source_id: String,
 }
 

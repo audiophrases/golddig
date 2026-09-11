@@ -1,69 +1,124 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+//! Builds and enriches Golddig dictionary packs.
+//!
+//! An unknown mode used to fall through to a legacy positional form, so a typo silently
+//! did something else; and `tatoeba` printed a success message while doing nothing at all.
+//! Both now behave.
+
 use anyhow::Result;
-use golddig_lib::pack::{build_pack_from_files, build_pack_from_kaikki};
-use std::env;
+use golddig_lib::pack::{build_pack_from_files, build_pack_from_kaikki, merge_tatoeba_examples};
 use std::path::PathBuf;
 
+const USAGE: &str = "\
+Usage:
+  golddig-pack jsonl   <manifest.json> <entries.jsonl> <output.sqlite>
+  golddig-pack kaikki  <manifest.json> <kaikki.jsonl> <output.sqlite> [source_id] [max_entries]
+  golddig-pack tatoeba <pack.sqlite> <sentences.csv> <links.csv> <lang> [max_per_entry]
+  golddig-pack inspect <pack.sqlite>
+
+tatoeba takes the raw TSV exports from https://tatoeba.org/downloads and merges example
+sentences into an existing pack, matching each sentence against that pack's headwords and
+inflected forms. <lang> is a Golddig code (en, ca, es, fr, de, ary, zh).";
+
 fn main() -> Result<()> {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 4 {
-        eprintln!("Usage:");
-        eprintln!("  golddig-pack jsonl <manifest.json> <entries.jsonl> <output.sqlite>");
-        eprintln!("  golddig-pack kaikki <manifest.json> <kaikki.jsonl> <output.sqlite> [source_id] [max_entries]");
-        eprintln!("  golddig-pack tatoeba <manifest.json> <tatoeba.json> <output.sqlite>");
-        std::process::exit(1);
-    }
+    let args: Vec<String> = std::env::args().collect();
+    let mode = args.get(1).map(String::as_str).unwrap_or("");
 
-    let mode = &args[1];
-    if mode == "kaikki" {
-        if args.len() < 5 {
-            eprintln!("Usage: golddig-pack kaikki <manifest.json> <kaikki.jsonl> <output.sqlite> [source_id] [max_entries]");
-            std::process::exit(1);
+    match mode {
+        "jsonl" => {
+            let [manifest, entries, output] = expect(&args, 3, "jsonl")?;
+            println!("Building {output:?} from {entries:?}...");
+            build_pack_from_files(
+                PathBuf::from(manifest).as_path(),
+                PathBuf::from(entries).as_path(),
+                PathBuf::from(output).as_path(),
+            )?;
+            println!("Pack built successfully.");
         }
-        let manifest = PathBuf::from(&args[2]);
-        let entries = PathBuf::from(&args[3]);
-        let output = PathBuf::from(&args[4]);
-        let source_id = args
-            .get(5)
-            .map(|s| s.as_str())
-            .unwrap_or("kaikki-wiktionary");
-        let max_entries = args.get(6).and_then(|s| s.parse::<usize>().ok());
 
-        println!(
-            "Building pack from Kaikki Wiktextract {:?} and {:?} to {:?}...",
-            manifest, entries, output
-        );
-        let count = build_pack_from_kaikki(&manifest, &entries, &output, source_id, max_entries)?;
-        println!("Successfully built pack with {} entries!", count);
-    } else if mode == "tatoeba" {
-        println!("Tatoeba sentence pair pack ingestion mode ready.");
-    } else if mode == "jsonl" {
-        if args.len() < 5 {
-            eprintln!("Usage: golddig-pack jsonl <manifest.json> <entries.jsonl> <output.sqlite>");
-            std::process::exit(1);
+        "kaikki" => {
+            let [manifest, entries, output] = expect(&args, 3, "kaikki")?;
+            let source_id = args
+                .get(5)
+                .map(String::as_str)
+                .unwrap_or("kaikki-wiktionary");
+            let max_entries = args.get(6).and_then(|s| s.parse::<usize>().ok());
+            println!("Building {output:?} from Kaikki dump {entries:?}...");
+            let count = build_pack_from_kaikki(
+                PathBuf::from(manifest).as_path(),
+                PathBuf::from(entries).as_path(),
+                PathBuf::from(output).as_path(),
+                source_id,
+                max_entries,
+            )?;
+            println!("Successfully built pack with {count} entries.");
         }
-        let manifest = PathBuf::from(&args[2]);
-        let entries = PathBuf::from(&args[3]);
-        let output = PathBuf::from(&args[4]);
 
-        println!(
-            "Building pack from {:?} and {:?} to {:?}...",
-            manifest, entries, output
-        );
-        build_pack_from_files(&manifest, &entries, &output)?;
-        println!("Pack built successfully!");
-    } else {
-        // Fallback for legacy positional: golddig-pack <manifest.json> <entries.jsonl> <output.sqlite>
-        let manifest = PathBuf::from(&args[1]);
-        let entries = PathBuf::from(&args[2]);
-        let output = PathBuf::from(&args[3]);
+        "tatoeba" => {
+            let [pack, sentences, links] = expect(&args, 3, "tatoeba")?;
+            let lang = args
+                .get(5)
+                .map(String::as_str)
+                .ok_or_else(|| anyhow::anyhow!("tatoeba needs a language code\n\n{USAGE}"))?;
+            let max_per_entry = args
+                .get(6)
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(3);
+            let added = merge_tatoeba_examples(
+                PathBuf::from(&pack).as_path(),
+                PathBuf::from(&sentences).as_path(),
+                PathBuf::from(&links).as_path(),
+                lang,
+                max_per_entry,
+            )?;
+            println!("Merged {added} Tatoeba examples into {pack}.");
+        }
 
-        println!(
-            "Building pack from {:?} and {:?} to {:?}...",
-            manifest, entries, output
-        );
-        build_pack_from_files(&manifest, &entries, &output)?;
-        println!("Pack built successfully!");
+        "inspect" => {
+            let pack = args
+                .get(2)
+                .ok_or_else(|| anyhow::anyhow!("inspect needs a pack path\n\n{USAGE}"))?;
+            let conn = rusqlite::Connection::open_with_flags(
+                pack,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )?;
+            let entries: i64 = conn.query_row("SELECT count(*) FROM entries", [], |r| r.get(0))?;
+            let manifest: String = conn.query_row(
+                "SELECT value FROM manifest WHERE key = 'manifest'",
+                [],
+                |r| r.get(0),
+            )?;
+            println!("{pack}: {entries} entries\n{manifest}");
+            let mut stmt =
+                conn.prepare("SELECT term_type, count(*) FROM search_terms GROUP BY 1")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+            for row in rows {
+                let (kind, n) = row?;
+                println!("  {kind}: {n}");
+            }
+        }
+
+        // Anything else is an error. Falling through to a legacy positional form meant a
+        // mistyped mode quietly ran a different command.
+        other => {
+            if !other.is_empty() {
+                eprintln!("Unknown mode: {other}\n");
+            }
+            eprintln!("{USAGE}");
+            std::process::exit(2);
+        }
     }
 
     Ok(())
+}
+
+/// Pulls exactly `n` positional arguments following the mode, or prints usage.
+fn expect(args: &[String], n: usize, mode: &str) -> Result<[String; 3]> {
+    if args.len() < 2 + n {
+        anyhow::bail!("{mode} needs {n} arguments\n\n{USAGE}");
+    }
+    Ok([args[2].clone(), args[3].clone(), args[4].clone()])
 }

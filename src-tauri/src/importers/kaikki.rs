@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 use crate::model::{
     EntryRecord, ExampleRecord, FormRecord, PronunciationRecord, SenseRecord, TranslationRecord,
 };
@@ -8,7 +12,14 @@ pub struct KaikkiSound {
     pub ipa: Option<String>,
     pub tags: Option<Vec<String>>,
     pub audio: Option<String>,
+    pub ogg_url: Option<String>,
+    pub mp3_url: Option<String>,
+    /// Wiktextract emits the Chinese romanization under the hyphenated key `zh-pron`.
+    /// The alias keeps older snake_case dumps working.
+    #[serde(rename = "zh-pron", alias = "zh_pron")]
     pub zh_pron: Option<String>,
+    /// Some editions label the romanization generically instead.
+    pub roman: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,6 +27,7 @@ pub struct KaikkiExample {
     pub text: Option<String>,
     pub translation: Option<String>,
     pub english: Option<String>,
+    pub roman: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +41,7 @@ pub struct KaikkiTranslation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KaikkiSynonym {
     pub word: Option<String>,
+    pub roman: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +51,11 @@ pub struct KaikkiSense {
     pub examples: Option<Vec<KaikkiExample>>,
     pub translations: Option<Vec<KaikkiTranslation>>,
     pub synonyms: Option<Vec<KaikkiSynonym>>,
+    pub related: Option<Vec<KaikkiSynonym>>,
+    pub derived: Option<Vec<KaikkiSynonym>>,
+    pub coordinate_terms: Option<Vec<KaikkiSynonym>>,
+    pub tags: Option<Vec<String>>,
+    pub raw_tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +77,72 @@ pub struct KaikkiEntry {
     pub related: Option<Vec<KaikkiSynonym>>,
     pub derived: Option<Vec<KaikkiSynonym>>,
     pub coordinate_terms: Option<Vec<KaikkiSynonym>>,
+    pub synonyms: Option<Vec<KaikkiSynonym>>,
+    /// Wiktextract places translations at entry level as well as per sense. Dropping
+    /// this array was why shipped packs had 0% translation coverage.
+    pub translations: Option<Vec<KaikkiTranslation>>,
+}
+
+/// Flattens a Wiktextract relation list into plain strings. Where a romanization is
+/// present it is appended so non-Latin scripts stay readable, e.g. `اليوم (el-yūma)`.
+fn collect_related(list: &Option<Vec<KaikkiSynonym>>, out: &mut Vec<String>) {
+    if let Some(items) = list {
+        for item in items {
+            if let Some(word) = item.word.as_deref().map(clean_relation_word) {
+                if word.is_empty() {
+                    continue;
+                }
+                match item.roman.as_deref().map(str::trim) {
+                    Some(r) if !r.is_empty() && r != word => out.push(format!("{} ({})", word, r)),
+                    _ => out.push(word),
+                }
+            }
+        }
+    }
+}
+
+/// Trims the dangling bracket Wiktextract leaves behind when it lifts a parenthetical into
+/// `tags` or `roman` but keeps the opening bracket on the word — the Chinese extract emits
+/// `"您好 ("`, which would otherwise render as `您好 ( (nín hǎo)`.
+fn clean_relation_word(word: &str) -> String {
+    word.trim()
+        .trim_end_matches(|c: char| c == '(' || c == '（' || c == ',' || c.is_whitespace())
+        .trim()
+        .to_string()
+}
+
+/// Maps a Wiktextract translation list into TranslationRecords, skipping entries with
+/// no resolvable target language so `und` rows never reach the UI.
+fn collect_translations(
+    list: &Option<Vec<KaikkiTranslation>>,
+    source_id: &str,
+    out: &mut Vec<TranslationRecord>,
+) {
+    if let Some(items) = list {
+        for tr in items {
+            let word = match tr.word.as_deref().map(str::trim) {
+                Some(w) if !w.is_empty() => w,
+                _ => continue,
+            };
+            let target = tr
+                .code
+                .as_deref()
+                .or(tr.lang_code.as_deref())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let Some(target) = target else { continue };
+            out.push(TranslationRecord {
+                target_lang: target.to_string(),
+                text: word.to_string(),
+                source_id: source_id.to_string(),
+            });
+        }
+    }
+}
+
+fn dedupe_preserving_order(items: &mut Vec<String>) {
+    let mut seen = std::collections::HashSet::new();
+    items.retain(|item| seen.insert(item.clone()));
 }
 
 impl KaikkiEntry {
@@ -88,26 +172,54 @@ impl KaikkiEntry {
             None => format!("{}:{}{}", language, lemma, etym_suffix),
         };
 
-        // Map pronunciations (IPA and romanized / pinyin transcriptions)
+        // Map pronunciations (IPA plus romanized / pinyin transcriptions), keeping the
+        // region tags and recording URLs the source provides.
         let mut pronunciations = Vec::new();
         if let Some(sounds) = &self.sounds {
             for sound in sounds {
+                let tags = sound.tags.clone().unwrap_or_default();
+                let audio = sound
+                    .mp3_url
+                    .clone()
+                    .or_else(|| sound.ogg_url.clone())
+                    .or_else(|| sound.audio.clone());
+
                 if let Some(ipa) = &sound.ipa {
                     let clean_ipa = ipa.trim().to_string();
                     if !clean_ipa.is_empty() {
                         pronunciations.push(PronunciationRecord {
                             ipa: clean_ipa,
                             kind: "ipa".to_string(),
+                            tags: tags.clone(),
+                            audio: audio.clone(),
                             source_id: source_id.to_string(),
                         });
                     }
                 }
-                if let Some(zh) = &sound.zh_pron {
-                    let clean_zh = zh.trim().to_string();
-                    if !clean_zh.is_empty() {
+                // `zh-pron` for Chinese; `roman` is the generic romanization channel.
+                let romanization = sound
+                    .zh_pron
+                    .as_deref()
+                    .or(sound.roman.as_deref())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                if let Some(rom) = romanization {
+                    pronunciations.push(PronunciationRecord {
+                        ipa: rom.to_string(),
+                        kind: "transcription".to_string(),
+                        tags: tags.clone(),
+                        audio: audio.clone(),
+                        source_id: source_id.to_string(),
+                    });
+                }
+                // An audio-only sound entry still carries a usable recording.
+                if sound.ipa.is_none() && romanization.is_none() {
+                    if let Some(url) = audio {
                         pronunciations.push(PronunciationRecord {
-                            ipa: clean_zh,
-                            kind: "pinyin".to_string(),
+                            ipa: String::new(),
+                            kind: "audio".to_string(),
+                            tags,
+                            audio: Some(url),
                             source_id: source_id.to_string(),
                         });
                     }
@@ -115,29 +227,36 @@ impl KaikkiEntry {
             }
         }
 
-        // Extract common collocations / related terms at entry level
+        // For English, surface the American pronunciation first — the app advertises AmE.
+        if language == "en" {
+            pronunciations.sort_by_key(|p| {
+                let us = p.tags.iter().any(|t| {
+                    let t = t.to_ascii_lowercase();
+                    t.contains("us") || t.contains("american") || t.contains("ga")
+                });
+                if us {
+                    0
+                } else {
+                    1
+                }
+            });
+        }
+
+        // Extract related / derived / coordinate terms at entry level. These are
+        // Wiktionary relations, not corpus statistics — see collect_related.
         let mut entry_collocations = Vec::new();
-        if let Some(rel) = &self.related {
-            for r in rel {
-                if let Some(w) = &r.word {
-                    entry_collocations.push(w.clone());
-                }
-            }
-        }
-        if let Some(der) = &self.derived {
-            for d in der {
-                if let Some(w) = &d.word {
-                    entry_collocations.push(w.clone());
-                }
-            }
-        }
-        if let Some(coord) = &self.coordinate_terms {
-            for c in coord {
-                if let Some(w) = &c.word {
-                    entry_collocations.push(w.clone());
-                }
-            }
-        }
+        collect_related(&self.related, &mut entry_collocations);
+        collect_related(&self.derived, &mut entry_collocations);
+        collect_related(&self.coordinate_terms, &mut entry_collocations);
+        dedupe_preserving_order(&mut entry_collocations);
+
+        let mut entry_synonyms = Vec::new();
+        collect_related(&self.synonyms, &mut entry_synonyms);
+
+        // Entry-level translations. Wiktextract puts translations here as well as on
+        // each sense; reading only the per-sense field lost most of them.
+        let mut entry_translations = Vec::new();
+        collect_translations(&self.translations, source_id, &mut entry_translations);
 
         // Map senses, definitions, translations, examples, synonyms
         let mut senses = Vec::new();
@@ -161,10 +280,14 @@ impl KaikkiEntry {
                 if let Some(raw_examples) = raw_sense.examples {
                     for ex in raw_examples {
                         if let Some(text) = ex.text {
+                            if text.trim().is_empty() {
+                                continue;
+                            }
                             let trans = ex.translation.or(ex.english);
                             examples.push(ExampleRecord {
                                 text,
                                 translation: trans,
+                                roman: ex.roman,
                                 source_id: source_id.to_string(),
                             });
                         }
@@ -172,37 +295,29 @@ impl KaikkiEntry {
                 }
 
                 let mut translations = Vec::new();
-                if let Some(raw_tr) = raw_sense.translations {
-                    for tr in raw_tr {
-                        if let Some(tr_word) = tr.word {
-                            let target = tr
-                                .code
-                                .or(tr.lang_code)
-                                .unwrap_or_else(|| "und".to_string());
-                            translations.push(TranslationRecord {
-                                target_lang: target,
-                                text: tr_word,
-                                source_id: source_id.to_string(),
-                            });
-                        }
-                    }
-                }
+                collect_translations(&raw_sense.translations, source_id, &mut translations);
 
                 let mut synonyms = Vec::new();
-                if let Some(raw_syn) = raw_sense.synonyms {
-                    for s in raw_syn {
-                        if let Some(w) = s.word {
-                            synonyms.push(w);
-                        }
-                    }
-                }
+                collect_related(&raw_sense.synonyms, &mut synonyms);
 
-                // Attach entry-level collocations to the first sense
-                let collocations = if idx == 0 {
-                    entry_collocations.clone()
-                } else {
-                    Vec::new()
-                };
+                // Sense-level relations belong to this sense; entry-level ones are
+                // attached to the first sense since the source does not scope them.
+                let mut collocations = Vec::new();
+                collect_related(&raw_sense.related, &mut collocations);
+                collect_related(&raw_sense.derived, &mut collocations);
+                collect_related(&raw_sense.coordinate_terms, &mut collocations);
+
+                if idx == 0 {
+                    collocations.extend(entry_collocations.iter().cloned());
+                    synonyms.extend(entry_synonyms.iter().cloned());
+                    translations.extend(entry_translations.iter().cloned());
+                }
+                dedupe_preserving_order(&mut collocations);
+                dedupe_preserving_order(&mut synonyms);
+
+                let mut tags = raw_sense.tags.unwrap_or_default();
+                tags.extend(raw_sense.raw_tags.unwrap_or_default());
+                dedupe_preserving_order(&mut tags);
 
                 senses.push(SenseRecord {
                     id: sense_id,
@@ -211,6 +326,7 @@ impl KaikkiEntry {
                     translations,
                     synonyms,
                     collocations,
+                    tags,
                     source_id: source_id.to_string(),
                 });
             }

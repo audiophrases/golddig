@@ -1,205 +1,310 @@
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+     License, v. 2.0. If a copy of the MPL was not distributed with this
+     file, You can obtain one at https://mozilla.org/MPL/2.0/. -->
+
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import type { EntryRecord, PackInfo, SearchSuggestion } from './lib/types';
+  import type {
+    EntryRecord,
+    PackDiagnostics,
+    PackInfo,
+    SearchSuggestion,
+  } from './lib/types';
   import { MOCK_ENTRIES, MOCK_PACKS, mockSuggest } from './lib/mockData';
   import EntryView from './lib/components/EntryView.svelte';
 
   let query = $state('');
   let suggestions = $state<SearchSuggestion[]>([]);
   let selectedEntry = $state<EntryRecord | null>(null);
-  let statusMessage = $state('Ready. Local dictionary packs loaded.');
+  let statusMessage = $state('Loading dictionary packs…');
   let packs = $state<PackInfo[]>([]);
-  let showPacksModal = $state(false);
+  let diagnostics = $state<PackDiagnostics | null>(null);
+  let showPacksPanel = $state(false);
+  let highlightIndex = $state(-1);
+  let searchInput: HTMLInputElement | null = null;
   let debounceTimer: ReturnType<typeof setTimeout>;
 
-  async function callTauri<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
-    // 1. Direct invoke from @tauri-apps/api/core
-    try {
-      return await invoke<T>(cmd, args);
-    } catch (err: unknown) {
-      // If invoke is rejected because Tauri runtime is truly absent (e.g. running in standard browser)
-      // or window.__TAURI_INTERNALS__ is not present
-      const errStr = String(err);
-      if (
-        errStr.includes('__TAURI_INTERNALS__') ||
-        errStr.includes('not detected') ||
-        errStr.includes('is not a function')
-      ) {
-        // Fall through to mock fallback
-      } else {
-        // If it was a real backend error from Rust, rethrow
-        throw err;
-      }
-    }
+  // Monotonic token so a slow response cannot overwrite a newer one. Worst-case content
+  // search is far slower than the 80 ms debounce, so out-of-order replies were reachable.
+  let searchToken = 0;
 
-    // 2. Graceful browser preview fallback (for testing in Chrome / edge / dev server without Tauri wrapper)
-    if (cmd === 'list_packs') {
-      return MOCK_PACKS as unknown as T;
-    }
-    if (cmd === 'toggle_pack') {
-      return true as unknown as T;
-    }
-    if (cmd === 'suggest') {
-      const q = (args.query as string) || '';
-      return mockSuggest(q) as unknown as T;
-    }
-    if (cmd === 'get_entry') {
-      const entryId = (args.entryId as string) || '';
-      return (MOCK_ENTRIES[entryId] || null) as unknown as T;
-    }
+  // Capability probe, evaluated once. The previous implementation called invoke() and
+  // sniffed the thrown error's text for '__TAURI_INTERNALS__' / 'not detected'; outside
+  // Tauri the real error matches none of those strings, so the browser fallback never
+  // ran and the UI showed a raw TypeError instead.
+  const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
-    throw new Error(`Command not supported in browser preview: ${cmd}`);
+  async function callBackend<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
+    if (isTauri) return invoke<T>(cmd, args);
+
+    // Browser preview. Results are clearly badged as sample data in the status bar so
+    // they can never be mistaken for a real dictionary pack.
+    switch (cmd) {
+      case 'list_packs':
+        return MOCK_PACKS as unknown as T;
+      case 'pack_diagnostics':
+        return { pack_dir: '(browser preview)', loaded: MOCK_PACKS.length, errors: [] } as unknown as T;
+      case 'toggle_pack':
+        return true as unknown as T;
+      case 'suggest':
+        return mockSuggest((args.query as string) || '') as unknown as T;
+      case 'get_entry':
+        return (MOCK_ENTRIES[(args.entryId as string) || ''] || null) as unknown as T;
+      default:
+        throw new Error(`Command not available in browser preview: ${cmd}`);
+    }
+  }
+
+  function describeState() {
+    if (!isTauri) {
+      return 'Browser preview — showing built-in sample entries, not a dictionary pack.';
+    }
+    const enabled = packs.filter((p) => p.enabled);
+    const entries = enabled.reduce((sum, p) => sum + p.entry_count, 0);
+    const failed = diagnostics?.errors.length ?? 0;
+    if (packs.length === 0) {
+      const where = diagnostics?.pack_dir ?? 'packs';
+      return `No dictionary packs found in ${where}. Build one with scripts/fetch_and_build_pack.py.`;
+    }
+    let msg = `${enabled.length} of ${packs.length} packs active · ${entries.toLocaleString()} entries`;
+    if (failed > 0) msg += ` · ${failed} pack${failed === 1 ? '' : 's'} failed to load`;
+    return msg;
   }
 
   async function refreshPacks() {
     try {
-      const p = await callTauri<PackInfo[]>('list_packs');
-      packs = p;
-    } catch {
-      // In web browser dev/preview mode without native Tauri
+      packs = await callBackend<PackInfo[]>('list_packs');
+      diagnostics = await callBackend<PackDiagnostics>('pack_diagnostics');
+    } catch (err) {
+      statusMessage = `Could not read pack list: ${err}`;
+      return;
     }
+    statusMessage = describeState();
   }
 
   async function togglePack(packId: string, currentEnabled: boolean) {
     try {
-      await callTauri<boolean>('toggle_pack', { packId, enabled: !currentEnabled });
+      await callBackend<boolean>('toggle_pack', { packId, enabled: !currentEnabled });
       await refreshPacks();
-      if (query.trim()) {
-        handleInput();
-      }
+      if (query.trim()) runSearch();
     } catch (err) {
-      statusMessage = `Failed to toggle pack: ${err}`;
+      statusMessage = `Could not switch that pack: ${err}`;
     }
   }
 
   function handleInput() {
     clearTimeout(debounceTimer);
+    highlightIndex = -1;
     if (!query.trim()) {
       suggestions = [];
+      statusMessage = describeState();
       return;
     }
-
-    debounceTimer = setTimeout(async () => {
-      try {
-        statusMessage = 'Searching...';
-        const res = await callTauri<SearchSuggestion[]>('suggest', { query: query.trim() });
-        suggestions = res;
-        statusMessage = `${res.length} matches found`;
-        if (res.length > 0) {
-          // Auto-load top exact match
-          loadEntry(res[0].entry_id);
-        }
-      } catch (err) {
-        statusMessage = `Search error: ${err}`;
-      }
-    }, 80);
+    debounceTimer = setTimeout(runSearch, 80);
   }
 
-  async function loadEntry(entryId: string) {
+  async function runSearch() {
+    const token = ++searchToken;
+    const q = query.trim();
+    if (!q) return;
     try {
-      const entry = await callTauri<EntryRecord | null>('get_entry', { entryId });
+      const results = await callBackend<SearchSuggestion[]>('suggest', { query: q });
+      if (token !== searchToken) return; // a newer query already went out
+      suggestions = results;
+      statusMessage = results.length
+        ? `${results.length} match${results.length === 1 ? '' : 'es'} for “${q}”`
+        : `No matches for “${q}”`;
+
+      // Open the top hit only when it is genuinely an exact headword match. Otherwise
+      // leave the choice to the reader rather than guessing.
+      const top = results[0];
+      if (top && top.match_type === 'lemma' && top.matched_term === q.toLowerCase()) {
+        highlightIndex = 0;
+        loadEntry(top.entry_id, token);
+      } else {
+        selectedEntry = null;
+      }
+    } catch (err) {
+      if (token !== searchToken) return;
+      statusMessage = `Search failed: ${err}`;
+    }
+  }
+
+  async function loadEntry(entryId: string, token = searchToken) {
+    try {
+      const entry = await callBackend<EntryRecord | null>('get_entry', { entryId });
+      if (token !== searchToken) return;
       selectedEntry = entry;
     } catch (err) {
-      statusMessage = `Failed to load entry: ${err}`;
+      statusMessage = `Could not open that entry: ${err}`;
+    }
+  }
+
+  function selectSuggestion(index: number) {
+    const sugg = suggestions[index];
+    if (!sugg) return;
+    highlightIndex = index;
+    loadEntry(sugg.entry_id);
+  }
+
+  function onSearchKeydown(event: KeyboardEvent) {
+    if (!suggestions.length) return;
+    switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault();
+        highlightIndex = (highlightIndex + 1) % suggestions.length;
+        selectSuggestion(highlightIndex);
+        break;
+      case 'ArrowUp':
+        event.preventDefault();
+        highlightIndex = highlightIndex <= 0 ? suggestions.length - 1 : highlightIndex - 1;
+        selectSuggestion(highlightIndex);
+        break;
+      case 'Enter':
+        event.preventDefault();
+        selectSuggestion(highlightIndex < 0 ? 0 : highlightIndex);
+        break;
+      case 'Escape':
+        event.preventDefault();
+        suggestions = [];
+        highlightIndex = -1;
+        break;
+    }
+  }
+
+  function onGlobalKeydown(event: KeyboardEvent) {
+    // Ctrl/Cmd+L focuses the search box, as the UI contract specifies.
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'l') {
+      event.preventDefault();
+      searchInput?.focus();
+      searchInput?.select();
     }
   }
 
   onMount(() => {
     refreshPacks();
+    searchInput?.focus();
   });
 </script>
+
+<svelte:window onkeydown={onGlobalKeydown} />
 
 <main class="app-layout">
   <header class="app-header">
     <div class="header-top">
-      <div class="search-bar">
-        <input
-          type="search"
-          placeholder="Type a word, phrase, or pattern (e.g. l?ght, l*t)..."
-          bind:value={query}
-          oninput={handleInput}
-          aria-label="Dictionary search"
-        />
-      </div>
+      <input
+        id="golddig-search"
+        class="search-input"
+        type="search"
+        placeholder="Type a word, phrase, or pattern (l?ght, l*t)…"
+        bind:value={query}
+        bind:this={searchInput}
+        oninput={handleInput}
+        onkeydown={onSearchKeydown}
+        role="combobox"
+        aria-label="Dictionary search"
+        aria-expanded={suggestions.length > 0}
+        aria-controls="golddig-suggestions"
+        aria-activedescendant={highlightIndex >= 0 ? `golddig-sugg-${highlightIndex}` : undefined}
+        aria-autocomplete="list"
+        autocomplete="off"
+        spellcheck="false"
+      />
       <button
         class="packs-btn"
-        onclick={() => (showPacksModal = !showPacksModal)}
-        aria-label="Manage dictionary packs"
+        onclick={() => (showPacksPanel = !showPacksPanel)}
+        aria-expanded={showPacksPanel}
+        aria-controls="golddig-packs"
       >
         Packs ({packs.filter((p) => p.enabled).length}/{packs.length})
       </button>
     </div>
 
-    {#if showPacksModal}
-      <div class="packs-panel">
+    {#if showPacksPanel}
+      <div class="packs-panel" id="golddig-packs">
         <div class="packs-header">
-          <h3>Active Dictionary Packs</h3>
-          <button class="close-btn" onclick={() => (showPacksModal = false)}>✕</button>
+          <h2>Dictionary packs</h2>
+          <button class="close-btn" onclick={() => (showPacksPanel = false)} aria-label="Close pack list">
+            ✕
+          </button>
         </div>
+
         {#if packs.length === 0}
-          <p class="no-packs">No external packs loaded. Base fixture active.</p>
+          <p class="no-packs">
+            No packs loaded. Golddig looked in <code>{diagnostics?.pack_dir ?? 'packs'}</code>.
+          </p>
         {:else}
           <ul class="packs-list">
-            {#each packs as p}
+            {#each packs as pack (pack.id)}
               <li class="pack-item">
                 <label class="pack-label">
                   <input
                     type="checkbox"
-                    checked={p.enabled}
-                    onchange={() => togglePack(p.id, p.enabled)}
+                    checked={pack.enabled}
+                    onchange={() => togglePack(pack.id, pack.enabled)}
                   />
-                  <div class="pack-details">
-                    <span class="pack-name">{p.name} (v{p.version})</span>
+                  <span class="pack-details">
+                    <span class="pack-name">{pack.name}</span>
                     <span class="pack-meta">
-                      {p.entry_count} entries · [{p.languages.join(', ')}]
+                      v{pack.version} · {pack.entry_count.toLocaleString()} entries ·
+                      {pack.languages.join(', ')}
                     </span>
-                  </div>
+                  </span>
                 </label>
               </li>
+            {/each}
+          </ul>
+        {/if}
+
+        {#if diagnostics && diagnostics.errors.length > 0}
+          <ul class="pack-errors">
+            {#each diagnostics.errors as err (err.path)}
+              <li><strong>{err.path}</strong> — {err.message}</li>
             {/each}
           </ul>
         {/if}
       </div>
     {/if}
 
-    <div class="status-bar" role="status">
-      <span>{statusMessage}</span>
-    </div>
+    <p class="status-bar" role="status">{statusMessage}</p>
   </header>
 
   <div class="main-body">
     {#if suggestions.length > 0}
-      <aside class="suggestions-sidebar">
-        <ul class="suggestions-list">
-          {#each suggestions as sugg}
-            <li>
+      <nav class="suggestions-sidebar" aria-label="Search results">
+        <ul class="suggestions-list" id="golddig-suggestions" role="listbox">
+          {#each suggestions as sugg, index (sugg.entry_id)}
+            <li role="none">
               <button
+                id="golddig-sugg-{index}"
                 class="suggestion-btn"
-                class:active={selectedEntry?.id === sugg.entry_id}
-                onclick={() => loadEntry(sugg.entry_id)}
+                class:active={index === highlightIndex}
+                role="option"
+                aria-selected={index === highlightIndex}
+                onclick={() => selectSuggestion(index)}
               >
                 <span class="sugg-lemma">{sugg.lemma}</span>
                 <span class="sugg-meta">
                   <span class="sugg-lang">{sugg.language}</span>
                   {#if sugg.match_type !== 'lemma'}
-                    <span class="sugg-type">[{sugg.match_type}]</span>
+                    <span class="sugg-type">{sugg.match_type}</span>
                   {/if}
                 </span>
               </button>
             </li>
           {/each}
         </ul>
-      </aside>
+      </nav>
     {/if}
 
-    <section class="content-pane">
+    <section class="content-pane" aria-live="polite">
       {#if selectedEntry}
         <EntryView entry={selectedEntry} />
+      {:else if suggestions.length > 0}
+        <p class="empty-state">Select a result to read its entry.</p>
       {:else}
-        <div class="empty-state">
-          <p>No entry displayed. Type a query to search the local dictionary pack.</p>
-        </div>
+        <p class="empty-state">Type a word to search your local dictionary packs.</p>
       {/if}
     </section>
   </div>
@@ -213,9 +318,12 @@
     max-width: 960px;
     margin: 0 auto;
     padding: 1rem;
-    box-sizing: border-box;
+    gap: 0.75rem;
   }
   .app-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
     border-bottom: 1px solid var(--border);
     padding-bottom: 0.75rem;
   }
@@ -224,13 +332,14 @@
     gap: 0.75rem;
     align-items: center;
   }
-  .search-bar {
+  .search-input {
     flex: 1;
+    min-width: 0;
+    font-size: 1.1rem;
   }
   .packs-btn {
     background: var(--code-bg);
     border: 1px solid var(--border);
-    color: var(--text);
     padding: 0.5rem 0.85rem;
     border-radius: 4px;
     cursor: pointer;
@@ -241,11 +350,10 @@
     border-color: var(--accent);
   }
   .packs-panel {
-    margin-top: 0.75rem;
     padding: 0.75rem 1rem;
     border: 1px solid var(--border);
     border-radius: 4px;
-    background: var(--code-bg);
+    background: var(--surface);
   }
   .packs-header {
     display: flex;
@@ -253,9 +361,10 @@
     align-items: center;
     margin-bottom: 0.5rem;
   }
-  .packs-header h3 {
+  .packs-header h2 {
     margin: 0;
-    font-size: 0.95rem;
+    font-size: 0.9rem;
+    font-weight: 600;
   }
   .close-btn {
     background: none;
@@ -263,23 +372,24 @@
     cursor: pointer;
     color: var(--text-muted);
   }
-  .packs-list {
+  .packs-list,
+  .pack-errors {
     list-style: none;
     padding: 0;
     margin: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
-  }
-  .pack-item {
-    display: flex;
-    align-items: center;
+    gap: 0.4rem;
   }
   .pack-label {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 0.5rem;
     cursor: pointer;
+  }
+  .pack-label input[type='checkbox'] {
+    margin-top: 0.3rem;
+    flex: none;
   }
   .pack-details {
     display: flex;
@@ -289,45 +399,37 @@
     font-size: 0.85rem;
     font-weight: 600;
   }
-  .pack-meta {
+  .pack-meta,
+  .no-packs {
     font-size: 0.75rem;
     color: var(--text-muted);
   }
   .no-packs {
-    font-size: 0.85rem;
-    color: var(--text-muted);
     margin: 0.25rem 0;
   }
-  .search-bar input {
-    width: 100%;
-    font-size: 1.15rem;
-    padding: 0.5rem 0.75rem;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--bg);
-    color: var(--text-h);
-    box-sizing: border-box;
-  }
-  .search-bar input:focus {
-    outline: none;
-    border-color: var(--accent);
+  .pack-errors {
+    margin-top: 0.6rem;
+    padding-top: 0.6rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.75rem;
+    color: #b4342f;
   }
   .status-bar {
+    margin: 0;
     font-size: 0.75rem;
     color: var(--text-muted);
-    margin-top: 0.35rem;
   }
   .main-body {
     display: flex;
     flex: 1;
-    overflow: hidden;
-    gap: 1.5rem;
-    margin-top: 1rem;
+    min-height: 0;
+    gap: 1.25rem;
   }
   .suggestions-sidebar {
-    width: 220px;
+    width: 210px;
+    flex: none;
     border-right: 1px solid var(--border);
-    padding-right: 0.75rem;
+    padding-right: 0.6rem;
     overflow-y: auto;
   }
   .suggestions-list {
@@ -336,20 +438,20 @@
     margin: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
+    gap: 0.15rem;
   }
   .suggestion-btn {
     width: 100%;
     text-align: left;
     background: none;
     border: none;
-    padding: 0.4rem 0.5rem;
+    padding: 0.35rem 0.5rem;
     border-radius: 3px;
     cursor: pointer;
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    color: var(--text);
+    gap: 0.5rem;
   }
   .suggestion-btn:hover {
     background: var(--code-bg);
@@ -361,23 +463,42 @@
   }
   .sugg-lemma {
     font-size: 0.95rem;
+    overflow-wrap: anywhere;
   }
   .sugg-meta {
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     color: var(--text-muted);
+    white-space: nowrap;
   }
   .sugg-lang {
     text-transform: uppercase;
   }
+  .sugg-type {
+    font-style: italic;
+  }
   .content-pane {
     flex: 1;
+    min-width: 0;
     overflow-y: auto;
-    padding-right: 0.5rem;
   }
   .empty-state {
     color: var(--text-muted);
     font-style: italic;
     padding-top: 2rem;
     text-align: center;
+  }
+
+  @media (max-width: 640px) {
+    .main-body {
+      flex-direction: column;
+    }
+    .suggestions-sidebar {
+      width: 100%;
+      max-height: 9rem;
+      border-right: none;
+      border-bottom: 1px solid var(--border);
+      padding-right: 0;
+      padding-bottom: 0.5rem;
+    }
   }
 </style>

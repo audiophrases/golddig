@@ -1,0 +1,20 @@
+{
+  "id": "kaikki-es",
+  "name": "Kaikki English Wiktionary (Spanish entries) — Spanish",
+  "version": "2026.09.11",
+  "schema_version": 1,
+  "languages": [
+    "es"
+  ],
+  "created_at": "2026-09-11T21:23:02Z",
+  "license": "CC-BY-SA-4.0",
+  "sources": [
+    {
+      "id": "kaikki-wiktionary",
+      "name": "Kaikki.org Wiktextract — English Wiktionary (Spanish entries)",
+      "url": "https://kaikki.org/dictionary/Spanish/kaikki.org-dictionary-Spanish.jsonl",
+      "license": "CC-BY-SA-4.0",
+      "attribution": "English Wiktionary (Spanish entries) contributors, extracted via Wiktextract and published by Kaikki.org. Retrieved Wed, 09 Sep 2026 20:58:52 GMT. Source SHA-256 (first 64 MB): 014a5855a34010ffcaddb20b8d3f728d1bcff08f50654c6a7c3914e3a003598b"
+    }
+  ]
+}

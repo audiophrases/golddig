@@ -4,7 +4,9 @@ A fast, local-first, open-source dictionary lookup app inspired by the speed and
 
 Golddig is an independent project and is not affiliated with or endorsed by GoldenDict or GoldenDict-ng.
 
-> **Status:** first vertical-slice implementation is underway. The application code is licensed under MPL-2.0; data packs retain their upstream licenses.
+> **Status:** working desktop application with a real multi-language pack pipeline. The
+> application code is licensed under MPL-2.0; data packs retain their upstream licenses —
+> see [`NOTICE.md`](NOTICE.md).
 
 ## Product idea
 
@@ -49,7 +51,11 @@ Then add FreeDict bilingual dictionaries, Tatoeba examples, Open English WordNet
 - **Desktop shell:** Tauri 2
 - **Core/importers:** Rust
 - **UI:** Svelte + TypeScript + Vite
-- **Storage/search:** SQLite + FTS5, with precomputed language-aware normalized keys
+- **Storage/search:** SQLite. Each pack stores entries as a JSON payload plus a
+  `search_terms` index of lemmas, inflected forms and romanized transcriptions, each with a
+  precomputed language-aware loose key. Lookup uses covering b-tree indexes and half-open
+  range probes, **not** FTS5 — `docs/architecture.md` describes an FTS5 design that is
+  proposed rather than built, and says so.
 - **Distribution:** tiny application plus independently versioned, immutable data packs
 
 See:
@@ -67,36 +73,74 @@ Install the frontend dependencies and run the validation commands:
 
 ### Search Features
 
-- **Standard Prefix & Exact Match:** Fast indexed prefix queries.
+- **Prefix and exact match:** index-backed. Prefix queries use a half-open range
+  (`term >= 'lig' AND term < 'lih'`) instead of `LIKE 'lig%'`, because SQLite cannot use a
+  BINARY index for its default case-insensitive `LIKE` — with `LIKE`, every keystroke
+  full-scanned the whole term table.
 - **Wildcard Search (`?` and `*`):**
   - `?` replaces exactly 1 character (e.g. `l?ght` matches `light`).
   - `*` replaces 0 or more characters (e.g. `l*t` matches `light`).
-- **Phrase Lookup:**
-  - Multi-word queries (e.g. `morning light`, `hola y adiós`, `salam 3likom`) match directly across lemmas, collocations, definitions, and sentence examples.
+- **Phrase lookup:** multi-word queries (`morning light`) match multi-word headwords and
+  collocation terms from the index. If those tiers do not fill the result list, Golddig also
+  scans sense definitions and examples — an unindexed scan (~80 ms on a 77 MB pack), so it
+  runs only for multi-word queries and never on the single-word keystroke path.
+- **Ranking:** candidates from every enabled pack are merged and sorted *globally* by match
+  tier (exact lemma, exact transcription, exact form, then prefix, then loose, then content),
+  then deduplicated by entry. One entry never appears twice in a result list.
 - **Accent & Diacritic Normalization:**
   - Catalan ela geminada (`col·lecció` / `col.leccio`), Spanish `ñ` vs `n`, German `ß` vs `ss`, French `œ` vs `oe`, Arabic Alif/Tashkeel, and Pinyin tones.
 
-### Dictionary Packs & Real Data Pipeline
+### Dictionary packs
 
-Golddig supports compile-time and runtime modular packs. A full English core dictionary with 61,652 entries (~73 MB SQLite) is pre-compiled at `packs/kaikki-english-core.sqlite`.
+Packs are **generated artifacts and are not committed** — only the tiny authored
+`packs/vertical-slice.sqlite` test fixture is in git. Build them locally; the app discovers
+every `.sqlite` file in its pack directory at startup.
 
-To download and build dictionaries for any supported language:
 ```sh
-# Build English core pack (61,652 entries, includes 'hi', 'hello', etc.):
-python scripts/fetch_and_build_pack.py en
+python scripts/build_all_packs.py            # all seven, smallest download first
+python scripts/build_all_packs.py ca es      # just these
+python scripts/fetch_and_build_pack.py en    # one target
+```
 
-# Or Catalan, Spanish, French, German:
-python scripts/fetch_and_build_pack.py ca
-python scripts/fetch_and_build_pack.py es
-python scripts/fetch_and_build_pack.py fr
-python scripts/fetch_and_build_pack.py de
+| Target | Source | Download |
+|---|---|---|
+| `en` | English Wiktionary | ~3.1 GB |
+| `zh` | Chinese (Han headwords, plus Pinyin transcriptions) | ~1.1 GB |
+| `de` | German | ~1.0 GB |
+| `es` | Spanish | ~989 MB |
+| `fr` | French | ~551 MB |
+| `ca` | Catalan | ~230 MB |
+| `ary` | Moroccan Arabic (Darija) | ~6 MB |
+| `simple-en` | Simple English Wiktionary — small, for testing | ~39 MB |
+
+Every build prints a coverage report and warns when a field it expected is empty, so a pack
+that would ship with 0% of a feature fails visibly instead of silently.
+
+**Where translations come from.** English Wiktionary publishes translation tables only on
+*English* lemmas (english to ca/es/fr/de/zh and so on). A Catalan or Spanish entry carries an
+English gloss but no translations array — verified: 0 of the first 40,000 Catalan records have
+one. So the `en` pack is what supplies the translations the UI shows. Translating *between*
+two non-English languages needs a genuinely bilingual source (FreeDict TEI, Apertium); that
+is tracked in [`docs/roadmap.md`](docs/roadmap.md) and is not implemented.
+
+### Example sentences from Tatoeba
+
+`golddig-pack tatoeba` merges [Tatoeba](https://tatoeba.org/downloads) sentences into an
+existing pack, matching each sentence against that pack's headwords and inflected forms and
+carrying the linked English translation:
+
+```sh
+golddig-pack tatoeba packs/kaikki-catalan.sqlite sentences.csv links.csv ca 3
 ```
 
 ### Quick Launchers & Shortcut
 
 For quick access on Windows, open the [`launchers/`](launchers/) folder in File Explorer:
-- **`launchers/Golddig.lnk`**: Direct Windows shortcut to the native executable with app icon and proper working directory (can be copied to your Desktop or pinned to Start).
-- **`launchers/start-golddig.bat`**: Double-click script that launches the desktop app (and auto-builds it if missing).
+- **`launchers/create-shortcut.bat`**: Generates `Golddig.lnk` for *this* machine. The
+  shortcut itself is not committed — a `.lnk` embeds an absolute path, so a committed one
+  points at whichever machine generated it.
+- **`launchers/start-golddig.bat`**: Double-click to launch the desktop app, building it
+  first if the binary is missing.
 - **`launchers/start-dev-mode.bat`**: Starts the live development server with hot-reloading.
 - **`launchers/run-tests-and-benchmarks.bat`**: Runs the entire test suite and latency benchmark in a console window.
 
@@ -106,10 +150,18 @@ For quick access on Windows, open the [`launchers/`](launchers/) folder in File 
 npm install
 npm run check
 npm run test
-npm run build
+npm run build        # required before the Rust steps: tauri::generate_context! reads dist/
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml
-cargo run --manifest-path src-tauri/Cargo.toml --bin golddig-bench
+
+# Benchmark. Takes the packs to measure; with no argument it measures every pack in packs/.
+cargo run --release --manifest-path src-tauri/Cargo.toml --bin golddig-bench
+cargo run --release --manifest-path src-tauri/Cargo.toml --bin golddig-bench -- --fixture
 ```
+
+The same steps run in CI on Linux and Windows — see
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 
 ### Ingestion CLI (`golddig-pack`)
@@ -126,7 +178,9 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin golddig-pack kaikki fixture
 
 ## Benchmarks
 
-See [`docs/benchmarks/vertical-slice.md`](docs/benchmarks/vertical-slice.md) for latency measurements of the SQLite/Rust engine.
+See [`docs/benchmarks/vertical-slice.md`](docs/benchmarks/vertical-slice.md). Figures are
+reported per pack alongside that pack's size and entry count: numbers measured on the
+7-entry authored fixture are not the engine's performance on a real dictionary.
 
 Start the desktop application in development mode with `npm run tauri dev`.
 

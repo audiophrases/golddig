@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import type { EntryRecord, PackInfo, SearchSuggestion } from './lib/types';
   import { MOCK_ENTRIES, MOCK_PACKS, mockSuggest } from './lib/mockData';
   import EntryView from './lib/components/EntryView.svelte';
@@ -13,29 +14,26 @@
   let debounceTimer: ReturnType<typeof setTimeout>;
 
   async function callTauri<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
-    // 1. Try official @tauri-apps/api/core if available
+    // 1. Direct invoke from @tauri-apps/api/core
     try {
-      const core = await import('@tauri-apps/api/core');
-      if (typeof core.invoke === 'function') {
-        return await core.invoke<T>(cmd, args);
+      return await invoke<T>(cmd, args);
+    } catch (err: unknown) {
+      // If invoke is rejected because Tauri runtime is truly absent (e.g. running in standard browser)
+      // or window.__TAURI_INTERNALS__ is not present
+      const errStr = String(err);
+      if (
+        errStr.includes('__TAURI_INTERNALS__') ||
+        errStr.includes('not detected') ||
+        errStr.includes('is not a function')
+      ) {
+        // Fall through to mock fallback
+      } else {
+        // If it was a real backend error from Rust, rethrow
+        throw err;
       }
-    } catch {
-      // Not in Tauri or module not resolvable
     }
 
-    // 2. Try window.__TAURI__ globals
-    const w = window as unknown as {
-      __TAURI__?: { core?: { invoke: (cmd: string, args: unknown) => Promise<T> } };
-      __TAURI_INTERNALS__?: { invoke: (cmd: string, args: unknown) => Promise<T> };
-    };
-    if (w.__TAURI__?.core?.invoke) {
-      return await w.__TAURI__.core.invoke(cmd, args);
-    }
-    if (w.__TAURI_INTERNALS__?.invoke) {
-      return await w.__TAURI_INTERNALS__.invoke(cmd, args);
-    }
-
-    // 3. Graceful browser preview fallback (for testing in Chrome / edge / dev server without Tauri wrapper)
+    // 2. Graceful browser preview fallback (for testing in Chrome / edge / dev server without Tauri wrapper)
     if (cmd === 'list_packs') {
       return MOCK_PACKS as unknown as T;
     }
@@ -51,7 +49,7 @@
       return (MOCK_ENTRIES[entryId] || null) as unknown as T;
     }
 
-    throw new Error(`Tauri core runtime not detected and no mock handler for command: ${cmd}`);
+    throw new Error(`Command not supported in browser preview: ${cmd}`);
   }
 
   async function refreshPacks() {

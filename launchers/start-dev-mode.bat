@@ -2,6 +2,8 @@
 setlocal
 cd /d "%~dp0\.."
 
+set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+
 echo [Golddig] Starting interactive development mode (hot-reloading)...
 where npm >nul 2>&1
 if errorlevel 1 (

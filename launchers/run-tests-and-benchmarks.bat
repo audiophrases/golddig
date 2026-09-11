@@ -2,6 +2,8 @@
 setlocal
 cd /d "%~dp0\.."
 
+set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+
 echo ========================================================
 echo   Running Golddig Verification and Test Suite
 echo ========================================================

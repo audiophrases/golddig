@@ -65,10 +65,11 @@ See:
 
 Install the frontend dependencies and run the validation commands:
 
-### Quick Launchers (Clickable `.bat` files)
+### Quick Launchers & Shortcut
 
-For quick access on Windows, open the [`launchers/`](launchers/) folder in File Explorer and double-click:
-- **`launchers/start-golddig.bat`**: Immediately launches the production desktop app.
+For quick access on Windows, open the [`launchers/`](launchers/) folder in File Explorer:
+- **`launchers/Golddig.lnk`**: Direct Windows shortcut to the native executable with app icon and proper working directory (can be copied to your Desktop or pinned to Start).
+- **`launchers/start-golddig.bat`**: Double-click script that launches the desktop app (and auto-builds it if missing).
 - **`launchers/start-dev-mode.bat`**: Starts the live development server with hot-reloading.
 - **`launchers/run-tests-and-benchmarks.bat`**: Runs the entire test suite and latency benchmark in a console window.
 

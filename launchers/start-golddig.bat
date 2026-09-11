@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0\.."
 
-set "EXE_PATH=%~dp0\..\src-tauri\target\release\golddig.exe"
+set "EXE_PATH=%CD%\src-tauri\target\release\golddig.exe"
 
 if not exist "%EXE_PATH%" (
     echo [Golddig] Release binary not found. Building release binary...
@@ -20,6 +20,6 @@ if not exist "%EXE_PATH%" (
     )
 )
 
-echo [Golddig] Starting Golddig desktop dictionary...
+echo [Golddig] Starting Golddig desktop dictionary from: %CD%
 start "" "%EXE_PATH%"
 exit /b 0

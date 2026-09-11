@@ -2,8 +2,9 @@
 /data/
 /packs/*
 !/packs/vertical-slice.sqlite
+!/packs/kaikki-english-core.sqlite
+conversation-export-*.txt
 *.sqlite3
-*.db
 *.jsonl
 *.jsonl.gz
 *.tar.bz2

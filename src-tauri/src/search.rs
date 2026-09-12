@@ -461,9 +461,44 @@ impl SearchEngine {
             }
         }
 
+        // Within one tier, many entries match a short query equally well: `man` hits the
+        // English noun, eight `MAN`/`Man` proper nouns and acronyms, and a Chinese loanword,
+        // all as exact lemmas. Two tie-breaks are unambiguous.
+
+        // 1. Prefer the headword spelled the way it was typed. A lowercase query wants
+        //    `man`, not `MAN` or `Man`.
+        let case_rank = |hit: &Hit| -> u8 {
+            let lemma = &hit.suggestion.lemma;
+            if *lemma == q_clean {
+                0
+            } else if lemma.to_lowercase() == q {
+                if lemma.chars().any(char::is_uppercase) {
+                    2
+                } else {
+                    1
+                }
+            } else {
+                3
+            }
+        };
+
+        // 2. Prefer ordinary words over proper nouns and bound morphemes. Someone typing a
+        //    lowercase common word rarely wants the place name or the affix first.
+        let pos_rank = |hit: &Hit| -> u8 {
+            match hit.suggestion.pos.as_deref() {
+                Some("name" | "prefix" | "suffix" | "infix" | "circumfix" | "abbrev") => 1,
+                _ => 0,
+            }
+        };
+
+        // Ties beyond this fall to pack load order, which is arbitrary. Deciding which
+        // language wins an exact tie is a user preference, and wants an explicit per-pack
+        // priority the reader can order — tracked in docs/roadmap.md.
         hits.sort_by(|a, b| {
             a.tier
                 .cmp(&b.tier)
+                .then_with(|| case_rank(a).cmp(&case_rank(b)))
+                .then_with(|| pos_rank(a).cmp(&pos_rank(b)))
                 .then(a.term_len.cmp(&b.term_len))
                 .then(a.pack_idx.cmp(&b.pack_idx))
                 .then_with(|| a.suggestion.lemma.cmp(&b.suggestion.lemma))

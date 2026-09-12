@@ -18,6 +18,7 @@ Usage:
   golddig-pack kaikki  <manifest.json> <kaikki.jsonl> <output.sqlite> [source_id] [max_entries]
   golddig-pack tatoeba <pack.sqlite> <sentences.csv> <links.csv> <lang> [max_per_entry]
   golddig-pack inspect <pack.sqlite>
+  golddig-pack lookup  <query> [limit] [packs-dir]
 
 tatoeba takes the raw TSV exports from https://tatoeba.org/downloads and merges example
 sentences into an existing pack, matching each sentence against that pack's headwords and
@@ -98,6 +99,42 @@ fn main() -> Result<()> {
             for row in rows {
                 let (kind, n) = row?;
                 println!("  {kind}: {n}");
+            }
+        }
+
+        // Runs the real engine over the real packs and prints the ranked result. Exists so
+        // ranking can be checked against shipped artifacts instead of only against the
+        // synthetic packs in the test suite — searching `man` used to return Arabic
+        // inflected forms above the English headword, and nothing surfaced that.
+        "lookup" => {
+            let query = args
+                .get(2)
+                .ok_or_else(|| anyhow::anyhow!("lookup needs a query\n\n{USAGE}"))?;
+            let limit: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(10);
+            let dir = args.get(4).map(String::as_str).unwrap_or("packs");
+
+            let mut engine = golddig_lib::search::SearchEngine::new();
+            let loaded = engine.load_directory(dir)?;
+            for err in engine.load_errors() {
+                eprintln!("warning: {} — {}", err.path, err.message);
+            }
+            println!("{loaded} pack(s) from {dir}/");
+
+            let started = std::time::Instant::now();
+            let hits = engine.suggest(query, limit)?;
+            let elapsed = started.elapsed();
+            println!("{} hit(s) for {query:?} in {elapsed:?}\n", hits.len());
+
+            for (i, hit) in hits.iter().enumerate() {
+                println!(
+                    "{:>2}. {:<24} {:<5} {:<10} matched {:?} as {}",
+                    i + 1,
+                    hit.lemma,
+                    hit.language,
+                    hit.pos.as_deref().unwrap_or("-"),
+                    hit.matched_term,
+                    hit.match_type
+                );
             }
         }
 

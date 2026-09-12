@@ -41,6 +41,16 @@
 >    (<https://github.com/rhasspy/piper>, MIT, ~20–60 MB per voice) invoked from Rust for
 >    genuinely offline synthesis.
 >
+> **User-settable pack priority.** With eight packs enabled, a short query matches many
+> entries equally well: `man` is an exact lemma in English (noun, verb, pronoun,
+> interjection), German (pronoun, adverb), French, Spanish and Chinese all at once. Ranking
+> now prefers the headword spelled as typed and demotes proper nouns and affixes, which fixes
+> the clearly-wrong cases. Beyond that the order falls to pack load order, which is
+> alphabetical and arbitrary. Which language should win an exact tie is a reader preference,
+> not something the engine can infer, so it needs an explicit per-pack priority the reader can
+> reorder — GoldenDict solved this with dictionary groups. `PackInfo` would carry a `priority`
+> and the packs panel would allow drag-ordering.
+>
 > **Also outstanding:** Open English WordNet and OMW for synsets; `wordfreq` for commonness;
 > `.gdpkg` packaging with signing and atomic activation; StarDict/DSL/Dictd/MDict importers;
 > history and bookmarks; a writable catalog database.

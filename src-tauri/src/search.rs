@@ -312,6 +312,10 @@ impl SearchEngine {
         const TIER_TERM_CONTAINS: i64 = 5;
         const TIER_CONTENT: i64 = 6;
 
+        // Wall-clock budget for each unindexed scan, per pack, so worst-case latency is
+        // bounded. Partial results are kept rather than discarded.
+        const SCAN_BUDGET: std::time::Duration = std::time::Duration::from_millis(120);
+
         let mut hits: Vec<Hit> = Vec::new();
         // Over-fetch per pack so the global sort has real candidates to choose between.
         let per_pack = ((limit * 4).max(20)) as i64;
@@ -414,16 +418,18 @@ impl SearchEngine {
                 }
             }
 
-            // Multi-word queries also match inside a headword or collocation term.
+            // Multi-word queries also match inside a headword or collocation term. No index
+            // can serve a leading `%`, so this runs under a wall-clock budget.
             if has_space {
                 let pattern = format!("%{}%", escape_like(&q));
-                Self::push_hits(
+                Self::push_hits_timeboxed(
                     &pack.conn,
                     &mut hits,
                     pack_idx,
                     &format!("{SELECT} WHERE s.term LIKE ?1 ESCAPE '\\' LIMIT ?2"),
                     &[&pattern, &per_pack],
                     TIER_TERM_CONTAINS,
+                    SCAN_BUDGET,
                 )?;
             }
         }
@@ -437,12 +443,12 @@ impl SearchEngine {
                 if !pack.enabled {
                     continue;
                 }
-                // Stop as soon as the list is full. Each pack's scan costs ~800 ms on a
-                // 198k-entry pack, so scanning all seven unconditionally would take seconds.
+                // Stop as soon as the list is full — unbudgeted, this scan read ~2 GB of
+                // JSON per pack and measured 10.5 s mean / 18 s p95 on the English pack.
                 if hits.len() >= limit {
                     break;
                 }
-                Self::push_hits(
+                Self::push_hits_timeboxed(
                     &pack.conn,
                     &mut hits,
                     pack_idx,
@@ -450,6 +456,7 @@ impl SearchEngine {
                      FROM entries WHERE data_json LIKE ?1 ESCAPE '\\' LIMIT ?2",
                     &[&pattern, &per_pack],
                     TIER_CONTENT,
+                    SCAN_BUDGET,
                 )?;
             }
         }
@@ -477,6 +484,57 @@ impl SearchEngine {
         }
 
         Ok(out)
+    }
+
+    /// Runs an unindexed query under a wall-clock budget, keeping whatever it found.
+    ///
+    /// The two scan-shaped tiers (multi-word `LIKE '%…%'` over terms, and the content scan
+    /// over `entries.data_json`) cannot use an index. On the 1.49M-entry English pack the
+    /// content scan reads ~2 GB of JSON and took **10.5 s mean, 18 s p95** — reachable by
+    /// typing any two words. A watchdog interrupts the statement at the deadline and the
+    /// partial result is used, so worst-case latency is bounded instead of unbounded.
+    ///
+    /// `SQLITE_INTERRUPT` is the expected outcome here, not an error. Replacing this with a
+    /// real FTS5 index over definitions and examples is the first item in docs/roadmap.md.
+    fn push_hits_timeboxed(
+        conn: &Connection,
+        hits: &mut Vec<Hit>,
+        pack_idx: usize,
+        sql: &str,
+        args: &[&dyn rusqlite::ToSql],
+        base_tier: i64,
+        budget: std::time::Duration,
+    ) -> Result<()> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let handle = conn.get_interrupt_handle();
+        let finished = Arc::new(AtomicBool::new(false));
+        let watchdog_flag = Arc::clone(&finished);
+        let watchdog = std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            while !watchdog_flag.load(Ordering::Relaxed) {
+                if start.elapsed() >= budget {
+                    handle.interrupt();
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        });
+
+        let result = Self::push_hits(conn, hits, pack_idx, sql, args, base_tier);
+
+        finished.store(true, Ordering::Relaxed);
+        let _ = watchdog.join();
+
+        match result {
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if e.code == rusqlite::ErrorCode::OperationInterrupted =>
+            {
+                Ok(()) // budget spent; keep the partial result
+            }
+            other => other,
+        }
     }
 
     /// Runs one candidate query and appends its rows with a computed rank.

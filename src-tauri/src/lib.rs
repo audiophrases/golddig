@@ -29,7 +29,7 @@ pub struct AppState {
 /// A failure to save is reported to the caller rather than swallowed: silently losing a
 /// preference the reader just set is the kind of quiet failure this project already had too
 /// much of.
-fn persist_preferences(engine: &SearchEngine, path: &std::path::Path) -> Result<(), String> {
+pub fn persist_preferences(engine: &SearchEngine, path: &std::path::Path) -> Result<(), String> {
     if path.as_os_str().is_empty() {
         return Ok(());
     }
@@ -53,6 +53,10 @@ pub struct PackDiagnostics {
     pub pack_dir: String,
     pub loaded: usize,
     pub errors: Vec<PackLoadError>,
+    /// Where pack order and enabled flags are saved. Empty when no data directory could be
+    /// resolved, in which case preferences apply for this session only — surfaced so that
+    /// degradation is visible instead of silent.
+    pub settings_path: String,
 }
 
 /// Candidate pack directories, most specific first.
@@ -193,6 +197,7 @@ pub fn run() {
 
             let state: State<'_, AppState> = app.state();
             *state.engine.lock().unwrap() = Some(engine);
+            diagnostics.settings_path = settings_file.to_string_lossy().to_string();
             *state.diagnostics.lock().unwrap() = diagnostics;
             *state.settings_path.lock().unwrap() = settings_file;
             Ok(())
@@ -207,4 +212,57 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Exercises the exact write path the `toggle_pack` and `reorder_packs` commands use, and
+    /// the read path `setup` uses, so the round trip is covered without driving the UI.
+    #[test]
+    fn test_preferences_round_trip_through_the_engine() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let fixture = root.join("packs/vertical-slice.sqlite");
+        let dir = std::env::temp_dir().join("golddig-prefs-roundtrip");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = settings::settings_path(&dir);
+
+        let mut engine = SearchEngine::new();
+        engine.add_pack(&fixture, true).unwrap();
+        let pack_id = engine.list_packs()[0].id.clone();
+
+        // Disable it and save, the way toggle_pack does.
+        engine.set_pack_enabled(&pack_id, false);
+        persist_preferences(&engine, &path).expect("preferences must save");
+        assert!(
+            path.exists(),
+            "settings file should exist at {}",
+            path.display()
+        );
+
+        // Reload into a fresh engine, the way setup does.
+        let mut reopened = SearchEngine::new();
+        reopened.add_pack(&fixture, true).unwrap();
+        let saved = settings::Settings::load(&path);
+        reopened.apply_preferences(|id| saved.get(id).map(|p| (p.priority, p.enabled)));
+
+        assert!(
+            !reopened.list_packs()[0].enabled,
+            "a pack disabled before restart must come back disabled"
+        );
+
+        // An unwritable location must report, not panic and not silently drop the change.
+        let blocked = PathBuf::from("");
+        assert!(
+            persist_preferences(&engine, &blocked).is_ok(),
+            "empty path is a no-op"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

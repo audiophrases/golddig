@@ -44,7 +44,12 @@
       case 'list_packs':
         return MOCK_PACKS as unknown as T;
       case 'pack_diagnostics':
-        return { pack_dir: '(browser preview)', loaded: MOCK_PACKS.length, errors: [] } as unknown as T;
+        return {
+          pack_dir: '(browser preview)',
+          loaded: MOCK_PACKS.length,
+          errors: [],
+          settings_path: '',
+        } as unknown as T;
       case 'toggle_pack':
         return true as unknown as T;
       case 'reorder_packs':
@@ -257,8 +262,11 @@
           </p>
         {:else}
           <p class="packs-hint">
-            Order decides which pack wins when two entries match equally well. Drag is not
-            wired up; use the arrows.
+            Order decides which pack wins when two entries match equally well. Use the arrows.
+            {#if isTauri && diagnostics && !diagnostics.settings_path}
+              <strong>Changes apply to this session only — no writable data directory was
+              found, so they cannot be saved.</strong>
+            {/if}
           </p>
           <ol class="packs-list">
             {#each packs as pack, index (pack.id)}

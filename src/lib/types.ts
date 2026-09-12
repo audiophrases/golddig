@@ -94,4 +94,6 @@ export interface PackDiagnostics {
   pack_dir: string;
   loaded: number;
   errors: PackLoadError[];
+  /** Where pack order and enabled flags are saved; empty means they are session-only. */
+  settings_path: string;
 }

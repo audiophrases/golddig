@@ -82,8 +82,10 @@ Install the frontend dependencies and run the validation commands:
   - `*` replaces 0 or more characters (e.g. `l*t` matches `light`).
 - **Phrase lookup:** multi-word queries (`morning light`) match multi-word headwords and
   collocation terms from the index. If those tiers do not fill the result list, Golddig also
-  scans sense definitions and examples — an unindexed scan (~80 ms on a 77 MB pack), so it
-  runs only for multi-word queries and never on the single-word keystroke path.
+  scans sense definitions and examples. That scan cannot use an index, so it runs under a
+  120 ms-per-pack budget and keeps the partial result: bounded at ~250 ms instead of the
+  10.5 s an unbudgeted scan of the 1.5M-entry English pack took. It runs only for
+  multi-word queries, never on the single-word keystroke path.
 - **Ranking:** candidates from every enabled pack are merged and sorted *globally* by match
   tier (exact lemma, exact transcription, exact form, then prefix, then loose, then content),
   then deduplicated by entry. One entry never appears twice in a result list.
@@ -103,7 +105,7 @@ python scripts/fetch_and_build_pack.py en    # one target
 ```
 
 | Target | Source | Download |
-|---|---|---|
+| --- | --- | --- |
 | `en` | English Wiktionary | ~3.1 GB |
 | `zh` | Chinese (Han headwords, plus Pinyin transcriptions) | ~1.1 GB |
 | `de` | German | ~1.0 GB |
@@ -136,6 +138,7 @@ golddig-pack tatoeba packs/kaikki-catalan.sqlite sentences.csv links.csv ca 3
 ### Quick Launchers & Shortcut
 
 For quick access on Windows, open the [`launchers/`](launchers/) folder in File Explorer:
+
 - **`launchers/create-shortcut.bat`**: Generates `Golddig.lnk` for *this* machine. The
   shortcut itself is not committed — a `.lnk` embeds an absolute path, so a committed one
   points at whichever machine generated it.
@@ -163,18 +166,37 @@ cargo run --release --manifest-path src-tauri/Cargo.toml --bin golddig-bench -- 
 The same steps run in CI on Linux and Windows — see
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
-
 ### Ingestion CLI (`golddig-pack`)
 
-Golddig provides a command-line tool to build validated SQLite dictionary packs from structured data:
+Builds, enriches and inspects packs. Prefer `scripts/fetch_and_build_pack.py` for builds —
+it rebuilds this binary first, generates the manifest from the real dump (URL,
+`Last-Modified`, source SHA-256) and reports coverage. Use the binary directly for
+inspection and for one-off builds.
 
 ```sh
-# Build from authored JSONL entries
-cargo run --manifest-path src-tauri/Cargo.toml --bin golddig-pack jsonl fixtures/vertical-slice.manifest.json fixtures/vertical-slice.entries.jsonl packs/my-pack.sqlite
+PACK="cargo run --release --manifest-path src-tauri/Cargo.toml --bin golddig-pack --"
 
-# Build directly from raw Kaikki Wiktextract JSONL dump
-cargo run --manifest-path src-tauri/Cargo.toml --bin golddig-pack kaikki fixtures/vertical-slice.manifest.json path/to/kaikki.jsonl packs/kaikki.sqlite [source_id] [max_entries]
+# Build from authored JSONL entries
+$PACK jsonl fixtures/vertical-slice.manifest.json \
+           fixtures/vertical-slice.entries.jsonl packs/my-pack.sqlite
+
+# Build from a raw Kaikki Wiktextract dump (manifest must match the dump's language)
+$PACK kaikki fixtures/kaikki-ca.manifest.json fixtures/kaikki-ca.jsonl \
+             packs/kaikki-catalan.sqlite kaikki-wiktionary [max_entries]
+
+# Merge Tatoeba example sentences into an existing pack
+$PACK tatoeba packs/kaikki-catalan.sqlite sentences.csv links.csv ca 3
+
+# Entry count, manifest and search-term breakdown
+$PACK inspect packs/kaikki-catalan.sqlite
+
+# Run the real engine over the real packs and print the ranked result. Use this to check
+# ranking against shipped artifacts, not just the synthetic packs in the test suite.
+$PACK lookup man
+$PACK lookup nihao 5
 ```
+
+An unknown mode exits non-zero rather than falling through to a different command.
 
 ## Benchmarks
 

@@ -13,13 +13,15 @@
 > wildcard (`?`/`*`, including suffix patterns via a reversed-term index), loose
 > diacritic-folded and content tiers; per-pack enable/disable; CI on Linux and Windows.
 >
-> **The four next pieces, in priority order:**
+> **Done since:** a contentless FTS5 index (`entries_fts`) over headwords, definitions,
+> examples and related terms, making phrase lookup a fast ranked tier — **812 ms → 0.33 ms**
+> on a 198k-entry pack, for +4.9% pack size. And reader-settable pack priority, persisted to
+> `pack-settings.json` in the app data directory, which also finally persists pack
+> enable/disable across restarts.
 >
-> 1. **FTS5 for content search.** Phrase lookup currently falls back to `LIKE` over the JSON
->    payload — ~680 ms on a 198k-entry pack. A contentless FTS5 index over definitions and
->    examples would make it a fast ranked tier instead of a slow last resort, and is the one
->    piece of `docs/architecture.md` worth actually building.
-> 2. **Real bilingual translations.** English Wiktionary only publishes translation tables on
+> **The three next pieces, in priority order:**
+>
+> 1. **Real bilingual translations.** English Wiktionary only publishes translation tables on
 >    *English* lemmas, so the `en` pack supplies english→X and nothing supplies X→Y. The fix
 >    is a genuinely bilingual source:
 >    - **FreeDict** (<https://freedict.org/>) — TEI XML, many pairs including eng↔spa,
@@ -28,28 +30,27 @@
 >      ca↔es coverage, built for exactly this.
 >    - **CC-CEDICT** (<https://cc-cedict.org/>) — CC BY-SA 4.0, ~120k entries, the standard
 >      English↔Mandarin source with Pinyin. Better for zh than Wiktionary alone.
-> 3. **Statistical collocations.** What the UI labels "Commonly used with" is currently
+> 2. **Statistical collocations.** What the UI labels "Commonly used with" is currently
 >    Wiktionary related/derived/coordinate terms — editorial relations, *not* corpus
 >    statistics. Real collocations need co-occurrence counts from a corpus: the
 >    **Leipzig Corpora Collection** (<https://wortschatz.uni-leipzig.de/en/download>)
 >    publishes per-language co-occurrence tables, licence per corpus. Until then the label
 >    overstates what the data is and should be read as "related words".
-> 4. **Offline neural pronunciation.** The speaker buttons are the platform Web Speech API,
+> 3. **Offline neural pronunciation.** The speaker buttons are the platform Web Speech API,
 >    which has no Catalan or Moroccan Arabic voice on Windows and whose best voices are
 >    cloud-only. Two honest routes: ship the Wiktionary recordings the importer already
 >    preserves in `PronunciationRecord.audio`, or bundle **Piper** ONNX voices
 >    (<https://github.com/rhasspy/piper>, MIT, ~20–60 MB per voice) invoked from Rust for
 >    genuinely offline synthesis.
 >
-> **User-settable pack priority.** With eight packs enabled, a short query matches many
-> entries equally well: `man` is an exact lemma in English (noun, verb, pronoun,
+> **Pack priority — built, with one rough edge.** With eight packs enabled, a short query
+> matches many entries equally well: `man` is an exact lemma in English (noun, verb, pronoun,
 > interjection), German (pronoun, adverb), French, Spanish and Chinese all at once. Ranking
-> now prefers the headword spelled as typed and demotes proper nouns and affixes, which fixes
-> the clearly-wrong cases. Beyond that the order falls to pack load order, which is
-> alphabetical and arbitrary. Which language should win an exact tie is a reader preference,
-> not something the engine can infer, so it needs an explicit per-pack priority the reader can
-> reorder — GoldenDict solved this with dictionary groups. `PackInfo` would carry a `priority`
-> and the packs panel would allow drag-ordering.
+> prefers the headword spelled as typed and demotes proper nouns and affixes; beyond that the
+> reader's pack order decides, set with the arrows in the packs panel and persisted. The rough
+> edge is the control itself: arrows rather than drag-and-drop, and no grouping, so there is no
+> way to say "Catalan and Spanish together, English after". GoldenDict's dictionary groups are
+> the richer model if this proves too blunt.
 >
 > **Also outstanding:** Open English WordNet and OMW for synsets; `wordfreq` for commonness;
 > `.gdpkg` packaging with signing and atomic activation; StarDict/DSL/Dictd/MDict importers;

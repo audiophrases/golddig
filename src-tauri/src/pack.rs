@@ -66,9 +66,91 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_search_term_rev
             ON search_terms(term_rev, term_type, entry_id);
         CREATE INDEX IF NOT EXISTS idx_entries_lang ON entries(language);
+
+        -- Full-text index over the prose inside each entry, so a multi-word query can be
+        -- answered from an index instead of scanning entries.data_json with LIKE. That scan
+        -- read ~2 GB of JSON on the English pack and took 10.5 s mean / 18 s p95.
+        --
+        -- content='' makes this contentless: only the inverted index is stored, never a
+        -- second copy of the text, which keeps the pack small. rowid mirrors entries.rowid.
+        --
+        -- remove_diacritics 0 is deliberate and is what docs/architecture.md always
+        -- specified: letting the tokenizer fold diacritics would conflate Spanish ñ with n.
+        -- Diacritic tolerance is an explicit, testable application rule (normalization.rs),
+        -- never a silent property of the tokenizer.
+        --
+        -- Separate columns so bm25 can weight a headword hit above a definition hit, and a
+        -- definition above an example. headwords is included so a phrase *inside* a
+        -- multi-word headword is findable here too; without it that case needed an
+        -- unindexed LIKE '%...%' over search_terms, which cost 120 ms on every multi-word
+        -- query whether or not it found anything.
+        CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
+            headwords,
+            definitions,
+            examples,
+            relations,
+            content='',
+            tokenize='unicode61 remove_diacritics 0'
+        );
         "#,
     )?;
     Ok(())
+}
+
+/// The searchable text of one entry, as the four FTS columns.
+///
+/// Returns None when an entry carries no prose worth indexing, so the index stays
+/// proportional to the content that actually exists.
+fn fts_columns(entry: &EntryRecord) -> Option<(String, String, String, String)> {
+    let mut headwords = entry.lemma.clone();
+    let mut definitions = String::new();
+    let mut examples = String::new();
+    let mut relations = String::new();
+
+    for form in &entry.forms {
+        if form.form != entry.lemma {
+            headwords.push('\n');
+            headwords.push_str(&form.form);
+        }
+    }
+
+    for sense in &entry.senses {
+        if !sense.definition.is_empty() {
+            definitions.push_str(&sense.definition);
+            definitions.push('\n');
+        }
+        for example in &sense.examples {
+            examples.push_str(&example.text);
+            examples.push('\n');
+            if let Some(translation) = &example.translation {
+                examples.push_str(translation);
+                examples.push('\n');
+            }
+        }
+        for item in sense.synonyms.iter().chain(sense.collocations.iter()) {
+            relations.push_str(item);
+            relations.push('\n');
+        }
+    }
+
+    if headwords.is_empty() && definitions.is_empty() && examples.is_empty() && relations.is_empty()
+    {
+        return None;
+    }
+    Some((headwords, definitions, examples, relations))
+}
+
+/// Adds one entry's prose to the full-text index, keyed to the row just inserted.
+fn insert_fts_row(tx: &rusqlite::Transaction<'_>, rowid: i64, entry: &EntryRecord) -> Result<bool> {
+    let Some((headwords, definitions, examples, relations)) = fts_columns(entry) else {
+        return Ok(false);
+    };
+    tx.execute(
+        "INSERT INTO entries_fts (rowid, headwords, definitions, examples, relations) \
+         VALUES (?, ?, ?, ?, ?)",
+        params![rowid, headwords, definitions, examples, relations],
+    )?;
+    Ok(true)
 }
 
 /// Statistics a pack build reports, so silent data loss becomes visible.
@@ -80,17 +162,19 @@ pub struct BuildStats {
     pub id_collisions: usize,
     pub search_terms: usize,
     pub transcription_terms: usize,
+    pub fts_rows: usize,
 }
 
 impl std::fmt::Display for BuildStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} entries, {} search terms ({} transcription), \
+            "{} entries, {} search terms ({} transcription), {} full-text rows, \
              {} unparseable lines, {} without senses, {} id collisions disambiguated",
             self.entries,
             self.search_terms,
             self.transcription_terms,
+            self.fts_rows,
             self.unparseable_lines,
             self.skipped_no_senses,
             self.id_collisions
@@ -167,6 +251,9 @@ fn insert_search_terms(
 /// Turns the build database into a shippable artifact: no WAL sidecars, compacted,
 /// and integrity-checked.
 fn finalize_pack(conn: &Connection) -> anyhow::Result<()> {
+    // Merge the FTS segments written during bulk insert into one, so a MATCH touches a
+    // single segment b-tree instead of dozens.
+    let _ = conn.execute_batch("INSERT INTO entries_fts(entries_fts) VALUES ('optimize');");
     conn.execute_batch("PRAGMA journal_mode = DELETE;")?;
     conn.execute_batch("VACUUM;")?;
     conn.execute_batch("ANALYZE;")?;
@@ -232,6 +319,7 @@ pub fn build_pack_from_files<P: AsRef<Path>>(
             params![entry.id, entry.language, entry.lemma, entry.pos, data_json],
         )?;
 
+        insert_fts_row(&tx, tx.last_insert_rowid(), &entry)?;
         insert_search_terms(&tx, &entry)?;
     }
 
@@ -318,6 +406,11 @@ pub fn build_pack_from_kaikki<P: AsRef<Path>>(
             "INSERT INTO entries (id, language, lemma, pos, data_json) VALUES (?, ?, ?, ?, ?)",
             params![entry.id, entry.language, entry.lemma, entry.pos, data_json],
         )?;
+
+        // Must read last_insert_rowid() before any further INSERT on this transaction.
+        if insert_fts_row(&tx, tx.last_insert_rowid(), &entry)? {
+            stats.fts_rows += 1;
+        }
 
         let (terms, transcriptions) = insert_search_terms(&tx, &entry)?;
         stats.search_terms += terms;
@@ -718,6 +811,31 @@ mod tests {
                     manifest.languages.contains(lang),
                     "{name}: entries use language {lang:?} but the manifest declares {:?}",
                     manifest.languages
+                );
+            }
+
+            // Where the full-text index exists it must actually be populated. An empty
+            // entries_fts would silently disable phrase lookup — exactly the shape of failure
+            // this whole test exists to catch.
+            let has_fts: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master \
+                     WHERE type = 'table' AND name = 'entries_fts'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            if has_fts > 0 {
+                let fts_rows: i64 = conn
+                    .query_row("SELECT count(*) FROM entries_fts", [], |r| r.get(0))
+                    .unwrap_or(0);
+                assert!(
+                    fts_rows > 0,
+                    "{name}: entries_fts exists but is empty, so phrase lookup is dead"
+                );
+                assert!(
+                    fts_rows <= entries,
+                    "{name}: {fts_rows} full-text rows for {entries} entries"
                 );
             }
 

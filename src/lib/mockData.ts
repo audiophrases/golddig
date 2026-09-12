@@ -15,6 +15,7 @@ export const MOCK_PACKS: PackInfo[] = [
     path: 'packs/vertical-slice.sqlite',
     enabled: true,
     entry_count: 10,
+    priority: 0,
   },
 ];
 

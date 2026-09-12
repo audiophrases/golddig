@@ -13,27 +13,41 @@ Status: **proposal for the first implementation spike**
 > normalization with loose keys; globally ranked multi-pack search with prefix, exact,
 > wildcard, loose and content tiers; the `golddig-pack` and `golddig-bench` CLIs.
 >
-> **Pack schema as built** — four tables, not the relational model described below:
+> **Pack schema as built** — four tables plus a full-text index, not the relational model
+> described below:
 >
 > ```sql
 > manifest(key, value)                        -- the pack manifest, as JSON
 > sources(id, name, url, license, attribution)
 > entries(id, language, lemma, pos, data_json) -- the entry is a JSON payload
-> search_terms(entry_id, term, term_type, loose_key, language)
+> search_terms(entry_id, term, term_type, loose_key, term_rev, language)
 >                                             -- term_type: lemma | form | transcription
+>                                             -- term_rev: term reversed, for suffix probes
+> entries_fts(headwords, definitions, examples, relations)
+>                                             -- contentless FTS5, rowid = entries.rowid
 > ```
+>
+> **Also built since this inventory was first written:**
+>
+> - **FTS5, as `entries_fts`.** Contentless, `unicode61 remove_diacritics 0` exactly as this
+>   document always specified, over headwords / definitions / examples / related terms, ranked
+>   with bm25 weighted in that order. Phrase lookup went from an unindexed `LIKE` scan of the
+>   JSON payload (812 ms on a 198k-entry pack, 10.5 s on the 1.5M-entry English pack) to
+>   **0.33 ms**, for about +5% pack size. Diacritic *tolerance* is still an explicit Rust rule
+>   in `normalization.rs` — the tokenizer deliberately does not fold, so Spanish ñ and n stay
+>   distinct. Packs built before the index exists still open and fall back to the old scan.
+> - **Reader-settable pack priority**, persisted to `pack-settings.json` in the app data
+>   directory, which breaks ranking ties between packs and also persists enable/disable.
 >
 > **Not built.** Do not read these as delivered:
 >
-> - **FTS5.** No pack contains an FTS table. Lookup uses covering b-tree indexes over
->   `search_terms` with half-open range probes. The `unicode61 remove_diacritics 0`
->   configuration below is a proposal; diacritic handling is done in Rust instead, which is
->   what `normalization.rs` is.
 > - **Relational senses.** There are no `sense`, `definition`, `translation`, `example`,
 >   `collocation`, `relation`, `pronunciation` or `provenance` tables. Those live inside
 >   `entries.data_json`.
-> - **`catalog.sqlite`.** No writable catalog, no global cross-pack term index, no history,
->   no bookmarks. Pack state is in-memory and rebuilt at startup.
+> - **`catalog.sqlite`.** No writable catalog database, no global cross-pack term index, no
+>   history, no bookmarks. Pack preferences live in a small JSON file instead; the rest of what
+>   a catalog would hold does not exist yet, and designing its schema before it does would be
+>   speculative.
 > - **`.gdpkg` packages.** No transport archive, no signing, no side-by-side versions, no
 >   atomic activation, no rollback, no sideload flow. A pack is a bare `.sqlite` file.
 > - **Sandboxed import.** `golddig-pack` is a separate binary but runs unsandboxed with no

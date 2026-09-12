@@ -47,6 +47,8 @@
         return { pack_dir: '(browser preview)', loaded: MOCK_PACKS.length, errors: [] } as unknown as T;
       case 'toggle_pack':
         return true as unknown as T;
+      case 'reorder_packs':
+        return MOCK_PACKS as unknown as T;
       case 'suggest':
         return mockSuggest((args.query as string) || '') as unknown as T;
       case 'get_entry':
@@ -81,6 +83,25 @@
       return;
     }
     statusMessage = describeState();
+  }
+
+  /**
+   * Moves a pack up or down the priority list. Position in the list decides which pack wins
+   * an otherwise-identical match: `man` is an exact lemma in five languages at once, and
+   * which one a reader wants first is a preference the engine cannot infer.
+   */
+  async function movePack(index: number, direction: -1 | 1) {
+    const target = index + direction;
+    if (target < 0 || target >= packs.length) return;
+    const order = packs.map((p) => p.id);
+    [order[index], order[target]] = [order[target], order[index]];
+    try {
+      packs = await callBackend<PackInfo[]>('reorder_packs', { packIds: order });
+      statusMessage = describeState();
+      if (query.trim()) runSearch();
+    } catch (err) {
+      statusMessage = `Could not reorder packs: ${err}`;
+    }
   }
 
   async function togglePack(packId: string, currentEnabled: boolean) {
@@ -235,9 +256,14 @@
             No packs loaded. Golddig looked in <code>{diagnostics?.pack_dir ?? 'packs'}</code>.
           </p>
         {:else}
-          <ul class="packs-list">
-            {#each packs as pack (pack.id)}
+          <p class="packs-hint">
+            Order decides which pack wins when two entries match equally well. Drag is not
+            wired up; use the arrows.
+          </p>
+          <ol class="packs-list">
+            {#each packs as pack, index (pack.id)}
               <li class="pack-item">
+                <span class="pack-rank">{index + 1}</span>
                 <label class="pack-label">
                   <input
                     type="checkbox"
@@ -252,9 +278,23 @@
                     </span>
                   </span>
                 </label>
+                <span class="pack-move">
+                  <button
+                    onclick={() => movePack(index, -1)}
+                    disabled={index === 0}
+                    title="Rank {pack.name} higher"
+                    aria-label="Move {pack.name} up"
+                  >↑</button>
+                  <button
+                    onclick={() => movePack(index, 1)}
+                    disabled={index === packs.length - 1}
+                    title="Rank {pack.name} lower"
+                    aria-label="Move {pack.name} down"
+                  >↓</button>
+                </span>
               </li>
             {/each}
-          </ul>
+          </ol>
         {/if}
 
         {#if diagnostics && diagnostics.errors.length > 0}
@@ -381,11 +421,54 @@
     flex-direction: column;
     gap: 0.4rem;
   }
+  .packs-hint {
+    margin: 0 0 0.5rem;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+  }
+  .pack-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+  .pack-rank {
+    flex: none;
+    min-width: 1.1rem;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    padding-top: 0.2rem;
+  }
+  .pack-move {
+    margin-left: auto;
+    display: flex;
+    gap: 0.15rem;
+    flex: none;
+  }
+  .pack-move button {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0.1rem 0.3rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+  .pack-move button:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .pack-move button:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
   .pack-label {
     display: flex;
     align-items: flex-start;
     gap: 0.5rem;
     cursor: pointer;
+    min-width: 0;
   }
   .pack-label input[type='checkbox'] {
     margin-top: 0.3rem;

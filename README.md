@@ -51,11 +51,11 @@ Then add FreeDict bilingual dictionaries, Tatoeba examples, Open English WordNet
 - **Desktop shell:** Tauri 2
 - **Core/importers:** Rust
 - **UI:** Svelte + TypeScript + Vite
-- **Storage/search:** SQLite. Each pack stores entries as a JSON payload plus a
-  `search_terms` index of lemmas, inflected forms and romanized transcriptions, each with a
-  precomputed language-aware loose key. Lookup uses covering b-tree indexes and half-open
-  range probes, **not** FTS5 — `docs/architecture.md` describes an FTS5 design that is
-  proposed rather than built, and says so.
+- **Storage/search:** SQLite. Each pack stores entries as a JSON payload, a `search_terms`
+  index of lemmas, inflected forms and romanized transcriptions — each with a precomputed
+  language-aware loose key and a reversed form for suffix patterns — and a contentless FTS5
+  index over headwords, definitions, examples and related terms. Headword lookup uses covering
+  b-tree indexes and half-open range probes; phrase lookup uses FTS5 ranked by bm25.
 - **Distribution:** tiny application plus independently versioned, immutable data packs
 
 See:
@@ -80,15 +80,18 @@ Install the frontend dependencies and run the validation commands:
 - **Wildcard Search (`?` and `*`):**
   - `?` replaces exactly 1 character (e.g. `l?ght` matches `light`).
   - `*` replaces 0 or more characters (e.g. `l*t` matches `light`).
-- **Phrase lookup:** multi-word queries (`morning light`) match multi-word headwords and
-  collocation terms from the index. If those tiers do not fill the result list, Golddig also
-  scans sense definitions and examples. That scan cannot use an index, so it runs under a
-  120 ms-per-pack budget and keeps the partial result: bounded at ~250 ms instead of the
-  10.5 s an unbudgeted scan of the 1.5M-entry English pack took. It runs only for
-  multi-word queries, never on the single-word keystroke path.
+- **Phrase lookup:** multi-word queries (`morning light`) search headwords, sense
+  definitions, example sentences and related terms through a contentless FTS5 index, ranked by
+  bm25 with headwords weighted above definitions, definitions above examples. 0.33 ms on a
+  198k-entry pack. Query text is passed as a quoted FTS5 phrase, so `AND`, `*`, `^`, `:` and
+  friends stay literal rather than changing the search. Packs built before the index existed
+  fall back to a `LIKE` scan under a 120 ms-per-pack budget.
 - **Ranking:** candidates from every enabled pack are merged and sorted *globally* by match
-  tier (exact lemma, exact transcription, exact form, then prefix, then loose, then content),
-  then deduplicated by entry. One entry never appears twice in a result list.
+  tier (exact lemma, exact transcription, exact form, then prefix, then loose, then full-text),
+  then deduplicated by entry. One entry never appears twice in a result list. Within a tier,
+  the headword spelled as typed wins, then ordinary words over proper nouns and affixes, and
+  finally **your pack order** — reorder packs with the arrows in the Packs panel. `man` is an
+  exact lemma in five languages at once, so which one leads is your choice, not a guess.
 - **Accent & Diacritic Normalization:**
   - Catalan ela geminada (`col·lecció` / `col.leccio`), Spanish `ñ` vs `n`, German `ß` vs `ss`, French `œ` vs `oe`, Arabic Alif/Tashkeel, and Pinyin tones.
 
@@ -117,6 +120,9 @@ python scripts/fetch_and_build_pack.py en    # one target
 
 Every build prints a coverage report and warns when a field it expected is empty, so a pack
 that would ship with 0% of a feature fails visibly instead of silently.
+
+Pack order and which packs are on are remembered in `pack-settings.json` in the app's data
+directory. Both used to reset at every launch.
 
 **Where translations come from.** English Wiktionary publishes translation tables only on
 *English* lemmas (english to ca/es/fr/de/zh and so on). A Catalan or Spanish entry carries an

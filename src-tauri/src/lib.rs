@@ -7,9 +7,11 @@ pub mod model;
 pub mod normalization;
 pub mod pack;
 pub mod search;
+pub mod settings;
 
 use model::{EntryRecord, SearchSuggestion};
 use search::{PackInfo, PackLoadError, SearchEngine};
+use settings::Settings;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Manager, State};
@@ -17,6 +19,30 @@ use tauri::{Manager, State};
 pub struct AppState {
     pub engine: Mutex<Option<SearchEngine>>,
     pub diagnostics: Mutex<PackDiagnostics>,
+    /// Where pack preferences are persisted. Empty when no data directory is available, in
+    /// which case preferences apply for the session but are not saved.
+    pub settings_path: Mutex<PathBuf>,
+}
+
+/// Writes the current pack order and enabled flags to disk.
+///
+/// A failure to save is reported to the caller rather than swallowed: silently losing a
+/// preference the reader just set is the kind of quiet failure this project already had too
+/// much of.
+fn persist_preferences(engine: &SearchEngine, path: &std::path::Path) -> Result<(), String> {
+    if path.as_os_str().is_empty() {
+        return Ok(());
+    }
+    let mut settings = Settings::load(path);
+    let order = engine.pack_order();
+    let ids: Vec<String> = order.iter().map(|(id, _, _)| id.clone()).collect();
+    settings.set_order(&ids);
+    for (id, _, enabled) in &order {
+        settings.set_enabled(id, *enabled);
+    }
+    settings
+        .save(path)
+        .map_err(|e| format!("could not save pack preferences to {}: {e}", path.display()))
 }
 
 /// Where packs were looked for and what happened. The status bar is derived from this
@@ -85,11 +111,31 @@ fn list_packs(state: State<'_, AppState>) -> Result<Vec<PackInfo>, String> {
 #[tauri::command]
 fn toggle_pack(pack_id: String, enabled: bool, state: State<'_, AppState>) -> Result<bool, String> {
     let mut guard = state.engine.lock().map_err(|e| e.to_string())?;
-    if let Some(engine) = guard.as_mut() {
-        Ok(engine.set_pack_enabled(&pack_id, enabled))
-    } else {
-        Ok(false)
+    let Some(engine) = guard.as_mut() else {
+        return Ok(false);
+    };
+    let changed = engine.set_pack_enabled(&pack_id, enabled);
+    if changed {
+        let path = state.settings_path.lock().map_err(|e| e.to_string())?;
+        persist_preferences(engine, &path)?;
     }
+    Ok(changed)
+}
+
+/// Sets the order packs break ranking ties in. Position in `pack_ids` is the priority.
+#[tauri::command]
+fn reorder_packs(
+    pack_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<PackInfo>, String> {
+    let mut guard = state.engine.lock().map_err(|e| e.to_string())?;
+    let Some(engine) = guard.as_mut() else {
+        return Ok(Vec::new());
+    };
+    engine.set_pack_order(&pack_ids);
+    let path = state.settings_path.lock().map_err(|e| e.to_string())?;
+    persist_preferences(engine, &path)?;
+    Ok(engine.list_packs())
 }
 
 #[tauri::command]
@@ -104,6 +150,7 @@ pub fn run() {
         .manage(AppState {
             engine: Mutex::new(None),
             diagnostics: Mutex::new(PackDiagnostics::default()),
+            settings_path: Mutex::new(PathBuf::new()),
         })
         .setup(|app| {
             let mut engine = SearchEngine::new();
@@ -130,9 +177,24 @@ pub fn run() {
                 .cloned()
                 .collect();
 
+            // Apply the reader's saved order and enabled flags. Without this, both were
+            // reset to alphabetical-and-all-on at every launch.
+            let settings_file = app
+                .path()
+                .app_data_dir()
+                .map(|dir| settings::settings_path(&dir))
+                .unwrap_or_default();
+            if !settings_file.as_os_str().is_empty() {
+                let saved = Settings::load(&settings_file);
+                engine.apply_preferences(|pack_id| {
+                    saved.get(pack_id).map(|pref| (pref.priority, pref.enabled))
+                });
+            }
+
             let state: State<'_, AppState> = app.state();
             *state.engine.lock().unwrap() = Some(engine);
             *state.diagnostics.lock().unwrap() = diagnostics;
+            *state.settings_path.lock().unwrap() = settings_file;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -140,6 +202,7 @@ pub fn run() {
             get_entry,
             list_packs,
             toggle_pack,
+            reorder_packs,
             pack_diagnostics
         ])
         .run(tauri::generate_context!())

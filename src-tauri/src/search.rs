@@ -65,6 +65,22 @@ fn to_glob_pattern(query: &str) -> String {
     query.replace('[', "[[]")
 }
 
+/// Builds an FTS5 phrase query from raw user input.
+///
+/// The whole query is wrapped in one double-quoted string, which makes FTS5 read it as a
+/// literal phrase rather than as its query language — so `*`, `^`, `:`, `-`, `AND` and
+/// friends cannot change the meaning of the search or raise a syntax error. Embedded
+/// double quotes are doubled, which is how FTS5 escapes them inside a string.
+///
+/// Returns None when nothing indexable remains, because `MATCH '""'` is a syntax error.
+fn fts_phrase_query(query: &str) -> Option<String> {
+    let has_token = query.chars().any(char::is_alphanumeric);
+    if !has_token {
+        return None;
+    }
+    Some(format!("\"{}\"", query.replace('"', "\"\"")))
+}
+
 /// Escapes LIKE metacharacters so a literal `%` or `_` typed by the user stays literal.
 /// Pair with an `ESCAPE` clause naming the same backslash in the SQL.
 fn escape_like(query: &str) -> String {
@@ -83,6 +99,8 @@ pub struct PackInfo {
     pub path: String,
     pub enabled: bool,
     pub entry_count: usize,
+    /// Lower sorts first. Breaks ranking ties between packs; see settings.rs.
+    pub priority: i64,
 }
 
 pub struct PackHandle {
@@ -97,6 +115,11 @@ pub struct PackHandle {
     /// Packs built before it was added do not, and must still open and work — a format
     /// addition should never make an installed dictionary unreadable.
     pub has_term_rev: bool,
+    /// Whether this pack carries the `entries_fts` full-text index. Packs built before it
+    /// existed fall back to the budgeted `LIKE` scan.
+    pub has_fts: bool,
+    /// Reader-assigned tie-break order; lower sorts first. Defaults to discovery order.
+    pub priority: i64,
 }
 
 /// A pack that could not be opened. Surfaced to the UI so a corrupt or missing pack
@@ -182,6 +205,15 @@ impl SearchEngine {
             .map(|n| n > 0)
             .unwrap_or(false);
 
+        let has_fts: bool = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'entries_fts'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+
         self.packs.push(PackHandle {
             manifest,
             path: p,
@@ -189,6 +221,10 @@ impl SearchEngine {
             enabled,
             entry_count: entry_count as usize,
             has_term_rev,
+            has_fts,
+            // Discovery order until the reader says otherwise, which keeps behaviour
+            // unchanged for anyone who never opens the packs panel.
+            priority: self.packs.len() as i64,
         });
 
         Ok(())
@@ -246,6 +282,7 @@ impl SearchEngine {
                 path: p.path.to_string_lossy().to_string(),
                 enabled: p.enabled,
                 entry_count: p.entry_count,
+                priority: p.priority,
             })
             .collect()
     }
@@ -265,6 +302,56 @@ impl SearchEngine {
             langs.push("generic".to_string());
         }
         langs
+    }
+
+    /// Applies reader preferences: which packs are on, and in what order they break ties.
+    ///
+    /// Any pack the preferences do not mention keeps its discovery order, placed after every
+    /// pack that does have an explicit priority.
+    pub fn apply_preferences(&mut self, lookup: impl Fn(&str) -> Option<(i64, bool)>) {
+        let fallback_base = self.packs.len() as i64;
+        for (index, pack) in self.packs.iter_mut().enumerate() {
+            match lookup(&pack.manifest.id) {
+                Some((priority, enabled)) => {
+                    pack.priority = priority;
+                    pack.enabled = enabled;
+                }
+                None => pack.priority = fallback_base + index as i64,
+            }
+        }
+        self.sort_by_priority();
+    }
+
+    /// Reorders packs so position in `ordered_pack_ids` becomes priority. Ids that are not
+    /// installed are ignored; installed packs the list omits are placed after the rest.
+    pub fn set_pack_order(&mut self, ordered_pack_ids: &[String]) {
+        let fallback_base = ordered_pack_ids.len() as i64;
+        for (index, pack) in self.packs.iter_mut().enumerate() {
+            pack.priority = ordered_pack_ids
+                .iter()
+                .position(|id| *id == pack.manifest.id)
+                .map(|position| position as i64)
+                .unwrap_or(fallback_base + index as i64);
+        }
+        self.sort_by_priority();
+    }
+
+    /// Keeps `self.packs` in priority order, so a pack's index *is* its rank. The suggest
+    /// tie-break then needs nothing beyond the index it already has.
+    fn sort_by_priority(&mut self) {
+        self.packs.sort_by(|a, b| {
+            a.priority
+                .cmp(&b.priority)
+                .then(a.manifest.id.cmp(&b.manifest.id))
+        });
+    }
+
+    /// Installed packs in priority order, as (id, priority, enabled).
+    pub fn pack_order(&self) -> Vec<(String, i64, bool)> {
+        self.packs
+            .iter()
+            .map(|p| (p.manifest.id.clone(), p.priority, p.enabled))
+            .collect()
     }
 
     /// Toggles a pack's active state by pack ID.
@@ -418,9 +505,11 @@ impl SearchEngine {
                 }
             }
 
-            // Multi-word queries also match inside a headword or collocation term. No index
-            // can serve a leading `%`, so this runs under a wall-clock budget.
-            if has_space {
+            // Multi-word queries also match inside a headword. Where an FTS index exists its
+            // `headwords` column covers that, so this unindexed scan — which spent its whole
+            // 120 ms budget on every multi-word query whether or not it matched anything —
+            // now runs only for packs built before entries_fts existed.
+            if has_space && !pack.has_fts {
                 let pattern = format!("%{}%", escape_like(&q));
                 Self::push_hits_timeboxed(
                     &pack.conn,
@@ -439,15 +528,38 @@ impl SearchEngine {
         // queries that the indexed tiers could not satisfy — never on the keystroke path.
         if has_space && hits.len() < limit {
             let pattern = format!("%{}%", escape_like(&q));
+            let fts_query = fts_phrase_query(q_clean);
             for (pack_idx, pack) in self.packs.iter().enumerate() {
                 if !pack.enabled {
                     continue;
                 }
-                // Stop as soon as the list is full — unbudgeted, this scan read ~2 GB of
-                // JSON per pack and measured 10.5 s mean / 18 s p95 on the English pack.
                 if hits.len() >= limit {
                     break;
                 }
+
+                // Preferred path: the full-text index. bm25 weights headwords above
+                // definitions, definitions above examples, examples above related terms, so
+                // the most relevant kind of match leads.
+                if pack.has_fts {
+                    if let Some(ref match_query) = fts_query {
+                        Self::push_hits(
+                            &pack.conn,
+                            &mut hits,
+                            pack_idx,
+                            "SELECT e.id, e.lemma, e.language, e.pos, e.lemma AS term, \
+                                    'content' AS term_type \
+                             FROM entries_fts f JOIN entries e ON e.rowid = f.rowid \
+                             WHERE entries_fts MATCH ?1 \
+                             ORDER BY bm25(entries_fts, 20.0, 10.0, 3.0, 1.0) LIMIT ?2",
+                            &[match_query, &per_pack],
+                            TIER_CONTENT,
+                        )?;
+                        continue;
+                    }
+                }
+
+                // Fallback for packs built before entries_fts existed. Unbudgeted, this scan
+                // read ~2 GB of JSON per pack and measured 10.5 s mean / 18 s p95 on English.
                 Self::push_hits_timeboxed(
                     &pack.conn,
                     &mut hits,
@@ -491,9 +603,10 @@ impl SearchEngine {
             }
         };
 
-        // Ties beyond this fall to pack load order, which is arbitrary. Deciding which
-        // language wins an exact tie is a user preference, and wants an explicit per-pack
-        // priority the reader can order — tracked in docs/roadmap.md.
+        // Ties beyond this fall to pack order, which the reader controls: `self.packs` is
+        // kept sorted by priority, so `pack_idx` *is* the reader's ranking. Before that
+        // existed this was alphabetical file order, which meant the Chinese loanword `man`
+        // outranked the English noun for no defensible reason.
         hits.sort_by(|a, b| {
             a.tier
                 .cmp(&b.tier)
@@ -979,6 +1092,147 @@ mod tests {
             "loose ß/ss folding must apply even though another pack produced a hit: {:?}",
             hits.iter().map(|h| &h.lemma).collect::<Vec<_>>()
         );
+    }
+
+    /// Reader-assigned pack order must decide which pack wins an otherwise exact tie.
+    ///
+    /// `man` is an exact lemma in English, German, French, Spanish and Chinese at once, so
+    /// something has to break the tie. It used to be alphabetical filename order, which put a
+    /// Chinese loanword above the English noun for no defensible reason.
+    #[test]
+    fn test_pack_order_decides_an_exact_tie() {
+        let zh = build_tiny_pack(
+            "prio-zh",
+            "zz-chinese",
+            &[&entry_json("zh:adj:man", "zh", "man", &[])],
+        );
+        let en = build_tiny_pack(
+            "prio-en",
+            "aa-english",
+            &[&entry_json("en:noun:man", "en", "man", &[])],
+        );
+
+        let mut engine = SearchEngine::new();
+        engine.add_pack(&zh, true).unwrap();
+        engine.add_pack(&en, true).unwrap();
+
+        // Reader puts Chinese first.
+        engine.set_pack_order(&["zz-chinese".to_string(), "aa-english".to_string()]);
+        let hits = engine.suggest("man", 5).unwrap();
+        assert_eq!(
+            hits[0].language, "zh",
+            "Chinese was ranked first by the reader"
+        );
+
+        // Reader puts English first: the same query must now lead with English.
+        engine.set_pack_order(&["aa-english".to_string(), "zz-chinese".to_string()]);
+        let hits = engine.suggest("man", 5).unwrap();
+        assert_eq!(
+            hits[0].language, "en",
+            "English was ranked first by the reader"
+        );
+
+        // list_packs reports the order, so the UI can render and reorder it.
+        let listed = engine.list_packs();
+        assert_eq!(listed[0].id, "aa-english");
+        assert_eq!(listed[0].priority, 0);
+        assert_eq!(listed[1].priority, 1);
+
+        // A pack the reader's list omits must still be usable, ranked after the rest.
+        engine.set_pack_order(&["zz-chinese".to_string()]);
+        assert_eq!(engine.list_packs()[0].id, "zz-chinese");
+        assert!(
+            engine.suggest("man", 5).unwrap().len() >= 2,
+            "omitted pack stays searchable"
+        );
+    }
+
+    /// Preferences loaded from disk must survive into ranking and enabled state.
+    #[test]
+    fn test_apply_preferences_sets_order_and_enabled() {
+        let a = build_tiny_pack(
+            "pref-a",
+            "aa-pack",
+            &[&entry_json("en:noun:one", "en", "one", &[])],
+        );
+        let b = build_tiny_pack(
+            "pref-b",
+            "bb-pack",
+            &[&entry_json("en:noun:two", "en", "two", &[])],
+        );
+
+        let mut engine = SearchEngine::new();
+        engine.add_pack(&a, true).unwrap();
+        engine.add_pack(&b, true).unwrap();
+
+        engine.apply_preferences(|pack_id| match pack_id {
+            "bb-pack" => Some((0, true)),
+            "aa-pack" => Some((1, false)),
+            _ => None,
+        });
+
+        let listed = engine.list_packs();
+        assert_eq!(listed[0].id, "bb-pack");
+        assert!(listed[0].enabled);
+        assert!(
+            !listed[1].enabled,
+            "a pack disabled in settings must load disabled"
+        );
+        assert!(
+            engine.suggest("one", 5).unwrap().is_empty(),
+            "a disabled pack must not contribute results"
+        );
+    }
+
+    /// Phrase lookup must reach prose inside an entry — a definition or an example — and it
+    /// must do so through the full-text index rather than by scanning the JSON payload.
+    #[test]
+    fn test_phrase_lookup_finds_text_inside_an_entry_via_fts() {
+        let entry = concat!(
+            r#"{"id":"en:noun:dawn","language":"en","lemma":"dawn","pos":"noun","#,
+            r#""pronunciations":[],"forms":[],"#,
+            r#""senses":[{"id":"en:noun:dawn-s1","#,
+            r#""definition":"the first appearance of light in the sky before sunrise","#,
+            r#""examples":[{"text":"They set out at the crack of dawn","source_id":"t"}],"#,
+            r#""source_id":"t"}]}"#
+        );
+        let pack = build_tiny_pack("fts", "fts-pack", &[entry]);
+        let engine = SearchEngine::open_pack(&pack).unwrap();
+
+        assert!(
+            engine.packs[0].has_fts,
+            "a freshly built pack must carry entries_fts"
+        );
+
+        // A phrase that appears only in the definition.
+        let from_definition = engine.suggest("appearance of light", 5).unwrap();
+        assert!(
+            from_definition.iter().any(|h| h.lemma == "dawn"),
+            "a phrase inside a definition should be findable, got {:?}",
+            from_definition.iter().map(|h| &h.lemma).collect::<Vec<_>>()
+        );
+        assert_eq!(from_definition[0].match_type, "content");
+
+        // A phrase that appears only in an example sentence.
+        let from_example = engine.suggest("crack of dawn", 5).unwrap();
+        assert!(
+            from_example.iter().any(|h| h.lemma == "dawn"),
+            "a phrase inside an example should be findable"
+        );
+
+        // FTS5 query-language metacharacters must stay literal rather than raising a
+        // syntax error or silently changing the search.
+        for hostile in [
+            "light AND sunrise",
+            "light OR \"x",
+            "light NEAR sky",
+            "* sky",
+        ] {
+            assert!(
+                engine.suggest(hostile, 5).is_ok(),
+                "query {hostile:?} must not error"
+            );
+        }
     }
 
     /// Guards the performance fix. The suggest prefix probe must use an index; it used to

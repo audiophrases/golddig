@@ -1,12 +1,12 @@
 {
   "id": "kaikki-fr",
   "name": "Kaikki English Wiktionary (French entries) — French",
-  "version": "2026.09.11",
+  "version": "2026.09.12",
   "schema_version": 1,
   "languages": [
     "fr"
   ],
-  "created_at": "2026-09-11T21:12:49Z",
+  "created_at": "2026-09-12T19:48:47Z",
   "license": "CC-BY-SA-4.0",
   "sources": [
     {

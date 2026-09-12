@@ -18,6 +18,8 @@ export interface PackInfo {
   path: string;
   enabled: boolean;
   entry_count: number;
+  /** Lower sorts first. Breaks ranking ties between packs; the reader sets it. */
+  priority: number;
 }
 
 export interface PronunciationRecord {

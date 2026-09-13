@@ -50,6 +50,11 @@ Status: **proposal for the first implementation spike**
 >   distinct. Packs built before the index exists still open and fall back to the old scan.
 > - **Reader-settable pack priority**, persisted to `pack-settings.json` in the app data
 >   directory, which breaks ranking ties between packs and also persists enable/disable.
+> - **Right-click → Look up** on any word in an entry (`src/lib/contextMenu.ts`,
+>   `src/lib/lookup.ts`): a native context menu built with Tauri's menu API at click time,
+>   Look up first, then Copy and Select All. The word under the pointer is found with
+>   `Intl.Segmenter`, so `l'home` and `col·lecció` are one word each and Chinese splits
+>   without spaces. Ties between languages go to the language of the entry being read.
 > - **Neural pronunciation** (`src-tauri/src/tts.rs`). The speaker button synthesizes with
 >   Microsoft neural voices through the Edge Read Aloud WebSocket service, one voice per pack
 >   language, MP3 handed to the WebView as a blob. The frontend falls back to the local Web

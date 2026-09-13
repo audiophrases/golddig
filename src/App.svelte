@@ -12,6 +12,8 @@
     SearchSuggestion,
   } from './lib/types';
   import { MOCK_ENTRIES, MOCK_PACKS, mockSuggest } from './lib/mockData';
+  import { isEditable, lookupTargetAt, showContextMenu } from './lib/contextMenu';
+  import { preferredHitIndex } from './lib/lookup';
   import EntryView from './lib/components/EntryView.svelte';
 
   let query = $state('');
@@ -130,7 +132,13 @@
     debounceTimer = setTimeout(runSearch, 80);
   }
 
-  async function runSearch() {
+  /**
+   * `openBest` is for an explicit look-up (right-click → Look up): the reader pointed at a
+   * word and wants to read about it, so the best hit opens even when it is not an exact
+   * headword, and the entry they were reading stays put when there is no hit at all.
+   * `preferLanguage` breaks ties between equally good hits from different packs.
+   */
+  async function runSearch(opts: { openBest?: boolean; preferLanguage?: string } = {}) {
     const token = ++searchToken;
     const q = query.trim();
     if (!q) return;
@@ -141,6 +149,15 @@
       statusMessage = results.length
         ? `${results.length} match${results.length === 1 ? '' : 'es'} for “${q}”`
         : `No matches for “${q}”`;
+
+      if (opts.openBest) {
+        const best = preferredHitIndex(results, opts.preferLanguage);
+        if (best >= 0) {
+          highlightIndex = best;
+          loadEntry(results[best].entry_id, token);
+        }
+        return;
+      }
 
       // Open the top hit only when it is genuinely an exact headword match. Otherwise
       // leave the choice to the reader rather than guessing.
@@ -199,6 +216,24 @@
     }
   }
 
+  /** Right-click → Look up: the selected or pointed-at word becomes the query. */
+  function lookUp(text: string) {
+    clearTimeout(debounceTimer);
+    query = text;
+    void runSearch({ openBest: true, preferLanguage: selectedEntry?.language });
+  }
+
+  function onContextMenu(event: MouseEvent) {
+    // The search box keeps its native Cut/Copy/Paste menu; the browser preview has no
+    // native menu API at all, so it keeps the browser's.
+    if (!isTauri || isEditable(event.target)) return;
+    event.preventDefault();
+    const lookupText = lookupTargetAt(event);
+    showContextMenu({ lookupText, onLookup: lookUp }).catch((err) => {
+      statusMessage = `Could not open the menu: ${err}`;
+    });
+  }
+
   function onGlobalKeydown(event: KeyboardEvent) {
     // Ctrl/Cmd+L focuses the search box, as the UI contract specifies.
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'l') {
@@ -216,7 +251,7 @@
 
 <svelte:window onkeydown={onGlobalKeydown} />
 
-<main class="app-layout">
+<main class="app-layout" oncontextmenu={onContextMenu}>
   <header class="app-header">
     <div class="header-top">
       <input

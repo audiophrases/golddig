@@ -97,6 +97,21 @@ Install the frontend dependencies and run the validation commands:
 - **Accent & Diacritic Normalization:**
   - Catalan ela geminada (`col·lecció` / `col.leccio`), Spanish `ñ` vs `n`, German `ß` vs `ss`, French `œ` vs `oe`, Arabic Alif/Tashkeel, and Pinyin tones.
 
+### Looking up a word from an entry
+
+Right-click any word in an entry — in a definition, an example, a translation — and the
+first item in the menu is **Look up “word”**. With text selected, the selection is looked
+up; with nothing selected, the word under the pointer is (it is selected first, so you can
+see what the menu means). The best hit opens and the result list shows the alternatives;
+when the same spelling exists in several languages, the entry you were reading decides
+which one wins. The rest of the menu is Copy and Select All. The search box keeps the
+platform's own Cut / Copy / Paste menu.
+
+The menu is a native one (`src/lib/contextMenu.ts`); the part that decides what a
+right-click means — word boundaries via `Intl.Segmenter`, stripping the punctuation a drag
+catches, keeping `-ing` intact — is `src/lib/lookup.ts` and is unit-tested. The browser
+preview has no native menu and keeps the browser's own.
+
 ### Pronunciation
 
 Two buttons next to the headword, both user-initiated and both using the network — lookup

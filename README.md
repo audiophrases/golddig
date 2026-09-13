@@ -53,9 +53,11 @@ Then add FreeDict bilingual dictionaries, Tatoeba examples, Open English WordNet
 - **UI:** Svelte + TypeScript + Vite
 - **Storage/search:** SQLite. Each pack stores entries as a JSON payload, a `search_terms`
   index of lemmas, inflected forms and romanized transcriptions — each with a precomputed
-  language-aware loose key and a reversed form for suffix patterns — and a contentless FTS5
-  index over headwords, definitions, examples and related terms. Headword lookup uses covering
-  b-tree indexes and half-open range probes; phrase lookup uses FTS5 ranked by bm25.
+  language-aware loose key and a reversed form for suffix patterns, keyed to the entry by
+  integer rowid — and a contentless FTS5 index over headwords, definitions, examples and
+  related terms. Headword lookup uses covering b-tree indexes and half-open range probes;
+  phrase lookup uses FTS5 ranked by bm25. Provenance equal to the pack default is omitted
+  from stored JSON and restored on read.
 - **Distribution:** tiny application plus independently versioned, immutable data packs
 
 See:
@@ -123,6 +125,32 @@ that would ship with 0% of a feature fails visibly instead of silently.
 
 Pack order and which packs are on are remembered in `pack-settings.json` in the app's data
 directory. Both used to reset at every launch.
+
+### Using packs on another machine
+
+Building needs the 7 GB of Wiktionary dumps; a second machine should get the finished packs
+instead. Package them once, move the `release/` folder however you like (GitHub Release
+assets, a USB drive, a synced folder), and install on the other side:
+
+```sh
+# On the machine that built them: gzip each pack, write SHA256SUMS and a README.
+python scripts/package_packs.py                 # every pack
+python scripts/package_packs.py ca es           # just these
+
+# On the other machine, from a Golddig checkout: verify, unpack, integrity-check, install
+# into the per-user directory the app reads at startup.
+python scripts/install_packs.py --dir path/to/release
+python scripts/install_packs.py kaikki-catalan.sqlite.gz kaikki-spanish.sqlite.gz
+```
+
+`golddig --pack-dirs` prints every directory the app searches and which one to use —
+`%APPDATA%\com.golddig.app\packs` on Windows. Dropping `.sqlite` files there by hand works
+too; the install script only adds checksum verification and an integrity check.
+
+Whole-file gzip compresses a pack roughly 5×: the full seven-language set is about 7 GB
+unpacked and about 1.3 GB to download, and every file is under GitHub's 2 GB release-asset
+limit. Per-language: English ~400 MB, Chinese ~290 MB, German ~255 MB, Spanish ~220 MB,
+French ~107 MB, Catalan 42 MB, Darija 1 MB — most people want two or three of these, not all.
 
 **Where translations come from.** English Wiktionary publishes translation tables only on
 *English* lemmas (english to ca/es/fr/de/zh and so on). A Catalan or Spanish entry carries an

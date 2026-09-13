@@ -17,15 +17,27 @@ Status: **proposal for the first implementation spike**
 > described below:
 >
 > ```sql
-> manifest(key, value)                        -- the pack manifest, as JSON
+> manifest(key, value)          -- 'manifest' (JSON) and 'default_source_id'
 > sources(id, name, url, license, attribution)
-> entries(id, language, lemma, pos, data_json) -- the entry is a JSON payload
-> search_terms(entry_id, term, term_type, loose_key, term_rev, language)
->                                             -- term_type: lemma | form | transcription
->                                             -- term_rev: term reversed, for suffix probes
+> entries(id, language, lemma, pos, data_json)
+>                               -- the entry is a JSON payload; records whose source_id
+>                               -- equals default_source_id omit it, restored on read
+> search_terms(entry_rowid, term, term_type, loose_key, term_rev)
+>                               -- entry_rowid: INTEGER -> entries.rowid
+>                               -- term_type: lemma | form | transcription
+>                               -- term_rev: term reversed, for suffix probes
 > entries_fts(headwords, definitions, examples, relations)
->                                             -- contentless FTS5, rowid = entries.rowid
+>                               -- contentless FTS5, rowid = entries.rowid
 > ```
+>
+> Two size decisions are deliberate. `search_terms` references the entry by integer rowid,
+> not its text id: the id is a string like `ca:noun:col·lecció` and was previously stored in
+> the table and each of its indexes — five copies. And a record's `source_id` is omitted from
+> the JSON when it equals the pack default, since storing the same id on every sense, example,
+> form and pronunciation was 12.6% of the payload. Together with dropping an unused `language`
+> column and a redundant `UNIQUE` index, the Catalan pack went from 273.8 MB to 199.7 MB
+> (−27%) and its gzipped download from 48.9 MB to 41.8 MB, with no change in lookup latency.
+> The engine detects either format at open time, so older packs still work.
 >
 > **Also built since this inventory was first written:**
 >

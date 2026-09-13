@@ -40,31 +40,37 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             data_json TEXT NOT NULL
         );
 
+        -- The entry is referenced by its integer rowid, not its text id. The id is a string
+        -- like "ca:noun:col·lecció" and it used to be stored in this table AND in each of
+        -- its indexes — five copies, ~37 MB on the Catalan pack alone. An integer is a few
+        -- bytes and joins to entries.rowid, the fastest lookup SQLite has.
+        --
+        -- There is deliberately no `language` column (never read: the engine takes it from
+        -- the entries row it already joins to), no AUTOINCREMENT id (nothing references a
+        -- search-term row), and no UNIQUE constraint (the builder de-duplicates per entry in
+        -- Rust, which is cheaper than maintaining a fourth b-tree).
         CREATE TABLE IF NOT EXISTS search_terms (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            entry_id TEXT NOT NULL REFERENCES entries(id),
+            entry_rowid INTEGER NOT NULL,
             term TEXT NOT NULL,
             term_type TEXT NOT NULL, -- 'lemma', 'form', 'transcription'
             loose_key TEXT NOT NULL,
             -- term with its characters reversed, so a suffix pattern becomes a prefix
             -- probe. Without it a leading-wildcard query such as *ight cost 589 ms mean
             -- and 1.4 s p95 on a 198k-entry pack, because no b-tree can serve a suffix.
-            term_rev TEXT NOT NULL DEFAULT '',
-            language TEXT NOT NULL,
-            UNIQUE (entry_id, term, term_type)
+            term_rev TEXT NOT NULL
         );
 
-        -- Covering indexes. The suggest query selects (term, term_type, entry_id), so
+        -- Covering indexes. The suggest query selects (term, term_type, entry_rowid), so
         -- these let SQLite answer a prefix probe from the index alone. They are only
         -- usable because the builder lowercases every term and the engine sets
         -- PRAGMA case_sensitive_like = ON; with the default case-insensitive LIKE,
         -- SQLite ignores a BINARY index and full-scans the table on every keystroke.
         CREATE INDEX IF NOT EXISTS idx_search_term
-            ON search_terms(term, term_type, entry_id);
+            ON search_terms(term, term_type, entry_rowid);
         CREATE INDEX IF NOT EXISTS idx_search_loose
-            ON search_terms(loose_key, term_type, entry_id);
+            ON search_terms(loose_key, term_type, entry_rowid);
         CREATE INDEX IF NOT EXISTS idx_search_term_rev
-            ON search_terms(term_rev, term_type, entry_id);
+            ON search_terms(term_rev, term_type, entry_rowid);
         CREATE INDEX IF NOT EXISTS idx_entries_lang ON entries(language);
 
         -- Full-text index over the prose inside each entry, so a multi-word query can be
@@ -186,12 +192,18 @@ impl std::fmt::Display for BuildStats {
 /// romanized transcription. Returns (terms written, transcription terms written).
 fn insert_search_terms(
     tx: &rusqlite::Transaction<'_>,
+    entry_rowid: i64,
     entry: &EntryRecord,
 ) -> Result<(usize, usize)> {
     let mut total = 0usize;
     let mut transcriptions = 0usize;
 
-    let write = |term: &str, kind: &str| -> Result<usize> {
+    // De-duplicate per entry here rather than with a UNIQUE index: an entry rarely has more
+    // than a few dozen terms, so a HashSet is far cheaper than a fourth b-tree that had to
+    // be maintained for millions of rows and shipped in every pack.
+    let mut seen: HashSet<(String, &str)> = HashSet::new();
+
+    let mut write = |term: &str, kind: &'static str| -> Result<usize> {
         let trimmed = term.trim();
         if trimmed.is_empty() {
             return Ok(0);
@@ -200,21 +212,21 @@ fn insert_search_terms(
         if keys.exact_normalized.is_empty() {
             return Ok(0);
         }
+        if !seen.insert((keys.exact_normalized.clone(), kind)) {
+            return Ok(0);
+        }
         let reversed: String = keys.exact_normalized.chars().rev().collect();
-        let n = tx.execute(
-            "INSERT OR IGNORE INTO search_terms \
-             (entry_id, term, term_type, loose_key, term_rev, language) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+        tx.execute(
+            "INSERT INTO search_terms (entry_rowid, term, term_type, loose_key, term_rev)              VALUES (?, ?, ?, ?, ?)",
             params![
-                entry.id,
+                entry_rowid,
                 keys.exact_normalized,
                 kind,
                 keys.loose_key,
-                reversed,
-                entry.language
+                reversed
             ],
         )?;
-        Ok(n)
+        Ok(1)
     };
 
     total += write(&entry.lemma, "lemma")?;
@@ -246,6 +258,17 @@ fn insert_search_terms(
     }
 
     Ok((total, transcriptions))
+}
+
+/// Records the pack-wide default `source_id`, so the engine can restore the field on every
+/// record that omitted it. Kept in the manifest key/value table under its own key rather
+/// than inside the manifest JSON, so older readers of the manifest are unaffected.
+fn record_default_source(tx: &rusqlite::Transaction<'_>, source_id: &str) -> Result<()> {
+    tx.execute(
+        "INSERT OR REPLACE INTO manifest (key, value) VALUES ('default_source_id', ?)",
+        params![source_id],
+    )?;
+    Ok(())
 }
 
 /// Turns the build database into a shippable artifact: no WAL sidecars, compacted,
@@ -294,6 +317,15 @@ pub fn build_pack_from_files<P: AsRef<Path>>(
         params![serde_json::to_string(&manifest)?],
     )?;
 
+    // Authored JSONL carries an explicit source_id on every record; the pack default is the
+    // manifest's first source, so records matching it can omit the field.
+    let default_source = manifest
+        .sources
+        .first()
+        .map(|s| s.id.clone())
+        .unwrap_or_default();
+    record_default_source(&tx, &default_source)?;
+
     for src in &manifest.sources {
         tx.execute(
             "INSERT OR REPLACE INTO sources (id, name, url, license, attribution) VALUES (?, ?, ?, ?, ?)",
@@ -311,7 +343,8 @@ pub fn build_pack_from_files<P: AsRef<Path>>(
             continue;
         }
 
-        let entry: EntryRecord = serde_json::from_str(trimmed)?;
+        let mut entry: EntryRecord = serde_json::from_str(trimmed)?;
+        entry.strip_default_source(&default_source);
         let data_json = serde_json::to_string(&entry)?;
 
         tx.execute(
@@ -319,8 +352,10 @@ pub fn build_pack_from_files<P: AsRef<Path>>(
             params![entry.id, entry.language, entry.lemma, entry.pos, data_json],
         )?;
 
-        insert_fts_row(&tx, tx.last_insert_rowid(), &entry)?;
-        insert_search_terms(&tx, &entry)?;
+        // Read once, immediately: any later INSERT on this transaction would overwrite it.
+        let rowid = tx.last_insert_rowid();
+        insert_fts_row(&tx, rowid, &entry)?;
+        insert_search_terms(&tx, rowid, &entry)?;
     }
 
     tx.commit()?;
@@ -352,6 +387,7 @@ pub fn build_pack_from_kaikki<P: AsRef<Path>>(
         "INSERT INTO manifest (key, value) VALUES ('manifest', ?)",
         params![serde_json::to_string(&manifest)?],
     )?;
+    record_default_source(&tx, source_id)?;
 
     for src in &manifest.sources {
         tx.execute(
@@ -401,18 +437,22 @@ pub fn build_pack_from_kaikki<P: AsRef<Path>>(
             stats.id_collisions += 1;
         }
 
+        // Every record the importer emits carries `source_id`; blanking the ones equal to
+        // the pack default lets serde omit them, which was 12.6% of the stored JSON.
+        entry.strip_default_source(source_id);
         let data_json = serde_json::to_string(&entry)?;
         tx.execute(
             "INSERT INTO entries (id, language, lemma, pos, data_json) VALUES (?, ?, ?, ?, ?)",
             params![entry.id, entry.language, entry.lemma, entry.pos, data_json],
         )?;
 
-        // Must read last_insert_rowid() before any further INSERT on this transaction.
-        if insert_fts_row(&tx, tx.last_insert_rowid(), &entry)? {
+        // Read once, immediately: any later INSERT on this transaction would overwrite it.
+        let rowid = tx.last_insert_rowid();
+        if insert_fts_row(&tx, rowid, &entry)? {
             stats.fts_rows += 1;
         }
 
-        let (terms, transcriptions) = insert_search_terms(&tx, &entry)?;
+        let (terms, transcriptions) = insert_search_terms(&tx, rowid, &entry)?;
         stats.search_terms += terms;
         stats.transcription_terms += transcriptions;
 
@@ -548,10 +588,10 @@ pub fn merge_tatoeba_examples<P: AsRef<Path>>(
 
     // Match each sentence's tokens against the pack's headwords and inflected forms.
     let mut conn = Connection::open(pack_path.as_ref())?;
-    let mut pending: HashMap<String, Vec<ExampleRecord>> = HashMap::new();
+    let mut pending: HashMap<i64, Vec<ExampleRecord>> = HashMap::new();
     {
         let mut lookup = conn.prepare(
-            "SELECT DISTINCT entry_id FROM search_terms \
+            "SELECT DISTINCT entry_rowid FROM search_terms \
              WHERE term = ?1 AND term_type IN ('lemma', 'form')",
         )?;
         for (sentence_id, text) in &target {
@@ -565,12 +605,12 @@ pub fn merge_tatoeba_examples<P: AsRef<Path>>(
                 if !seen_tokens.insert(token.clone()) {
                     continue;
                 }
-                let ids: Vec<String> = lookup
-                    .query_map(params![token], |r| r.get::<_, String>(0))?
+                let ids: Vec<i64> = lookup
+                    .query_map(params![token], |r| r.get::<_, i64>(0))?
                     .filter_map(|r| r.ok())
                     .collect();
-                for entry_id in ids {
-                    let slot = pending.entry(entry_id).or_default();
+                for entry_rowid in ids {
+                    let slot = pending.entry(entry_rowid).or_default();
                     if slot.len() >= max_per_entry {
                         continue;
                     }
@@ -601,10 +641,10 @@ pub fn merge_tatoeba_examples<P: AsRef<Path>>(
 
     let mut added = 0usize;
     {
-        let mut read = tx.prepare("SELECT data_json FROM entries WHERE id = ?1")?;
-        let mut write = tx.prepare("UPDATE entries SET data_json = ?2 WHERE id = ?1")?;
-        for (entry_id, examples) in &pending {
-            let json: String = match read.query_row(params![entry_id], |r| r.get(0)) {
+        let mut read = tx.prepare("SELECT data_json FROM entries WHERE rowid = ?1")?;
+        let mut write = tx.prepare("UPDATE entries SET data_json = ?2 WHERE rowid = ?1")?;
+        for (entry_rowid, examples) in &pending {
+            let json: String = match read.query_row(params![entry_rowid], |r| r.get(0)) {
                 Ok(j) => j,
                 Err(_) => continue,
             };
@@ -626,7 +666,7 @@ pub fn merge_tatoeba_examples<P: AsRef<Path>>(
                 entry.senses[0].examples.push(example.clone());
                 added += 1;
             }
-            write.execute(params![entry_id, serde_json::to_string(&entry)?])?;
+            write.execute(params![entry_rowid, serde_json::to_string(&entry)?])?;
         }
     }
     tx.commit()?;
@@ -767,11 +807,30 @@ mod tests {
                 .unwrap();
             assert!(entries > 0, "{name}: pack has no entries");
 
+            // Packs built before the integer-reference format keyed search_terms by the TEXT
+            // entry id. Both formats must satisfy the invariants below.
+            let has_rowid_ref: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM pragma_table_info('search_terms') \
+                     WHERE name = 'entry_rowid'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let (ref_col, join_on) = if has_rowid_ref > 0 {
+                ("entry_rowid", "e.rowid = s.entry_rowid")
+            } else {
+                ("entry_id", "e.id = s.entry_id")
+            };
+
             // Every entry must be reachable by its own lemma, or it is dead weight that
             // inflates the entry count while being unfindable.
             let lemma_terms: i64 = conn
                 .query_row(
-                    "SELECT count(DISTINCT entry_id) FROM search_terms WHERE term_type = 'lemma'",
+                    &format!(
+                        "SELECT count(DISTINCT {ref_col}) FROM search_terms \
+                         WHERE term_type = 'lemma'"
+                    ),
                     [],
                     |r| r.get(0),
                 )
@@ -784,8 +843,10 @@ mod tests {
             // No orphaned search terms.
             let orphans: i64 = conn
                 .query_row(
-                    "SELECT count(*) FROM search_terms s \
-                     LEFT JOIN entries e ON e.id = s.entry_id WHERE e.id IS NULL",
+                    &format!(
+                        "SELECT count(*) FROM search_terms s \
+                         LEFT JOIN entries e ON {join_on} WHERE e.id IS NULL"
+                    ),
                     [],
                     |r| r.get(0),
                 )

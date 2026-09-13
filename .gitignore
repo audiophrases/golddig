@@ -26,6 +26,10 @@
 !/fixtures/kaikki-sample-ca.jsonl
 !/fixtures/kaikki-sample-en.jsonl
 
+# Packaged release assets from scripts/package_packs.py — gigabytes, distributed via
+# GitHub Releases, never committed.
+/release/
+
 # Working notes that are not part of the project
 conversation-export-*.txt
 

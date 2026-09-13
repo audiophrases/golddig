@@ -118,6 +118,12 @@ pub struct PackHandle {
     /// Whether this pack carries the `entries_fts` full-text index. Packs built before it
     /// existed fall back to the budgeted `LIKE` scan.
     pub has_fts: bool,
+    /// The `FROM ... JOIN` clause matching this pack's search_terms format. Current packs
+    /// reference entries by integer rowid; packs built before that referenced the TEXT id.
+    pub terms_join: &'static str,
+    /// The `source_id` value records omit. Empty for packs built before the field could be
+    /// omitted, which store it on every record.
+    pub default_source: String,
     /// Reader-assigned tie-break order; lower sorts first. Defaults to discovery order.
     pub priority: i64,
 }
@@ -214,6 +220,28 @@ impl SearchEngine {
             .map(|n| n > 0)
             .unwrap_or(false);
 
+        let has_rowid_ref: bool = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('search_terms') WHERE name = 'entry_rowid'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        let terms_join = if has_rowid_ref {
+            "FROM search_terms s JOIN entries e ON e.rowid = s.entry_rowid "
+        } else {
+            "FROM search_terms s JOIN entries e ON e.id = s.entry_id "
+        };
+
+        let default_source: String = conn
+            .query_row(
+                "SELECT value FROM manifest WHERE key = 'default_source_id'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or_default();
+
         self.packs.push(PackHandle {
             manifest,
             path: p,
@@ -222,6 +250,8 @@ impl SearchEngine {
             entry_count: entry_count as usize,
             has_term_rev,
             has_fts,
+            terms_join,
+            default_source,
             // Discovery order until the reader says otherwise, which keeps behaviour
             // unchanged for anyone who never opens the packs panel.
             priority: self.packs.len() as i64,
@@ -386,8 +416,8 @@ impl SearchEngine {
         let has_wildcard = q.contains('?') || q.contains('*');
         let has_space = q.contains(' ');
 
-        const SELECT: &str = "SELECT e.id, e.lemma, e.language, e.pos, s.term, s.term_type \
-             FROM search_terms s JOIN entries e ON e.id = s.entry_id ";
+        // The FROM/JOIN comes from each pack, since its search_terms format decides it.
+        const COLUMNS: &str = "SELECT e.id, e.lemma, e.language, e.pos, s.term, s.term_type ";
 
         // Tiers. Multiplied by 10 and offset by match type in push_hits, so an exact
         // lemma beats an exact form, which beats any prefix match.
@@ -422,6 +452,7 @@ impl SearchEngine {
             if !pack.enabled {
                 continue;
             }
+            let join = pack.terms_join;
 
             if has_wildcard {
                 let pattern = to_glob_pattern(&q);
@@ -444,7 +475,7 @@ impl SearchEngine {
                         &mut hits,
                         pack_idx,
                         &format!(
-                            "{SELECT} WHERE s.term_rev >= ?1 AND s.term_rev < ?2 \
+                            "{COLUMNS}{join} WHERE s.term_rev >= ?1 AND s.term_rev < ?2 \
                              AND s.term GLOB ?3 LIMIT ?4"
                         ),
                         &[&reversed, &hi, &pattern, &per_pack],
@@ -454,7 +485,7 @@ impl SearchEngine {
                         &pack.conn,
                         &mut hits,
                         pack_idx,
-                        &format!("{SELECT} WHERE s.term GLOB ?1 LIMIT ?2"),
+                        &format!("{COLUMNS}{join} WHERE s.term GLOB ?1 LIMIT ?2"),
                         &[&pattern, &per_pack],
                         TIER_WILDCARD,
                     )?,
@@ -464,7 +495,7 @@ impl SearchEngine {
                     &pack.conn,
                     &mut hits,
                     pack_idx,
-                    &format!("{SELECT} WHERE s.term = ?1 LIMIT ?2"),
+                    &format!("{COLUMNS}{join} WHERE s.term = ?1 LIMIT ?2"),
                     &[&q, &per_pack],
                     TIER_EXACT,
                 )?;
@@ -474,7 +505,7 @@ impl SearchEngine {
                         &pack.conn,
                         &mut hits,
                         pack_idx,
-                        &format!("{SELECT} WHERE s.term >= ?1 AND s.term < ?2 LIMIT ?3"),
+                        &format!("{COLUMNS}{join} WHERE s.term >= ?1 AND s.term < ?2 LIMIT ?3"),
                         &[&q, &hi, &per_pack],
                         TIER_PREFIX,
                     )?;
@@ -489,7 +520,7 @@ impl SearchEngine {
                     &pack.conn,
                     &mut hits,
                     pack_idx,
-                    &format!("{SELECT} WHERE s.loose_key = ?1 LIMIT ?2"),
+                    &format!("{COLUMNS}{join} WHERE s.loose_key = ?1 LIMIT ?2"),
                     &[lp, &per_pack],
                     TIER_LOOSE_EXACT,
                 )?;
@@ -498,7 +529,9 @@ impl SearchEngine {
                         &pack.conn,
                         &mut hits,
                         pack_idx,
-                        &format!("{SELECT} WHERE s.loose_key >= ?1 AND s.loose_key < ?2 LIMIT ?3"),
+                        &format!(
+                            "{COLUMNS}{join} WHERE s.loose_key >= ?1 AND s.loose_key < ?2 LIMIT ?3"
+                        ),
                         &[lp, &hi, &per_pack],
                         TIER_LOOSE_PREFIX,
                     )?;
@@ -515,7 +548,7 @@ impl SearchEngine {
                     &pack.conn,
                     &mut hits,
                     pack_idx,
-                    &format!("{SELECT} WHERE s.term LIKE ?1 ESCAPE '\\' LIMIT ?2"),
+                    &format!("{COLUMNS}{join} WHERE s.term LIKE ?1 ESCAPE '\\' LIMIT ?2"),
                     &[&pattern, &per_pack],
                     TIER_TERM_CONTAINS,
                     SCAN_BUDGET,
@@ -740,13 +773,18 @@ impl SearchEngine {
 
             if let Some(res) = rows.next() {
                 let json_str = res?;
-                let entry: EntryRecord = serde_json::from_str(&json_str).map_err(|e| {
+                let mut entry: EntryRecord = serde_json::from_str(&json_str).map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
                         0,
                         rusqlite::types::Type::Text,
                         Box::new(e),
                     )
                 })?;
+                // Records omit a source_id equal to the pack default; restore it here so
+                // nothing downstream — the UI's provenance footer included — sees a blank.
+                if !pack.default_source.is_empty() {
+                    entry.fill_default_source(&pack.default_source);
+                }
                 return Ok(Some(entry));
             }
         }
@@ -1184,6 +1222,59 @@ mod tests {
         );
     }
 
+    /// A record's `source_id` is omitted from the stored JSON when it equals the pack
+    /// default and restored on read. Neither side may leak: the stored JSON must not carry
+    /// the default, and the returned entry must not carry a blank.
+    #[test]
+    fn test_default_source_is_omitted_on_disk_and_restored_on_read() {
+        // build_tiny_pack's manifest has no sources, so use the authored fixture, whose
+        // manifest names its default source explicitly.
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let engine = SearchEngine::open_pack(root.join("packs/vertical-slice.sqlite")).unwrap();
+        let default = engine.packs[0].default_source.clone();
+        assert!(
+            !default.is_empty(),
+            "fixture pack must record a default source"
+        );
+
+        // On disk: the default must not appear inside the entry's JSON.
+        let stored: String = engine.packs[0]
+            .conn
+            .query_row(
+                "SELECT data_json FROM entries WHERE lemma = 'light' LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let needle = format!("\"source_id\":\"{default}\"");
+        assert!(
+            !stored.contains(&needle),
+            "the pack default must be omitted from stored JSON, found it in: {stored}"
+        );
+
+        // On read: every record carries a non-empty source_id again.
+        let hits = engine.suggest("light", 1).unwrap();
+        let entry = engine.get_entry(&hits[0].entry_id).unwrap().unwrap();
+        for sense in &entry.senses {
+            assert!(!sense.source_id.is_empty(), "sense provenance restored");
+            for ex in &sense.examples {
+                assert!(!ex.source_id.is_empty(), "example provenance restored");
+            }
+            for tr in &sense.translations {
+                assert!(!tr.source_id.is_empty(), "translation provenance restored");
+            }
+        }
+        for form in &entry.forms {
+            assert!(!form.source_id.is_empty(), "form provenance restored");
+        }
+        for p in &entry.pronunciations {
+            assert!(!p.source_id.is_empty(), "pronunciation provenance restored");
+        }
+    }
+
     /// Phrase lookup must reach prose inside an entry — a definition or an example — and it
     /// must do so through the full-text index rather than by scanning the JSON payload.
     #[test]
@@ -1252,7 +1343,8 @@ mod tests {
             .conn
             .query_row(
                 "EXPLAIN QUERY PLAN SELECT e.id FROM search_terms s \
-                 JOIN entries e ON e.id = s.entry_id WHERE s.term >= 'lig' AND s.term < 'lih'",
+                 JOIN entries e ON e.rowid = s.entry_rowid \
+                 WHERE s.term >= 'lig' AND s.term < 'lih'",
                 [],
                 |r| r.get(3),
             )

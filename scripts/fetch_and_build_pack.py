@@ -187,7 +187,7 @@ def write_manifest(target: str, cfg: dict, raw: str) -> str:
         "id": f"kaikki-{target}",
         "name": f"Kaikki {cfg['edition']} — {cfg['name']}",
         "version": time.strftime("%Y.%m.%d", time.gmtime()),
-        "schema_version": 1,
+        "schema_version": 2,
         "languages": [cfg["lang"]],
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "license": WIKT_LICENSE,

@@ -2,7 +2,7 @@
   "id": "kaikki-fr",
   "name": "Kaikki English Wiktionary (French entries) — French",
   "version": "2026.09.12",
-  "schema_version": 1,
+  "schema_version": 2,
   "languages": [
     "fr"
   ],

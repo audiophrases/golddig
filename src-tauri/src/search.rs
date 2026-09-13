@@ -136,6 +136,14 @@ pub struct PackLoadError {
     pub message: String,
 }
 
+/// The newest pack format this build can read. Bump it whenever the builder starts writing
+/// something an older engine could not open, and keep detection for every older format so
+/// an installed dictionary never becomes unreadable by an upgrade.
+///
+/// 1 — original: search_terms keyed by TEXT entry_id, no term_rev, no FTS.
+/// 2 — integer entry_rowid, term_rev, entries_fts, default_source_id omitted from JSON.
+pub const SUPPORTED_SCHEMA_VERSION: i32 = 2;
+
 #[derive(Default)]
 pub struct SearchEngine {
     packs: Vec<PackHandle>,
@@ -191,6 +199,23 @@ impl SearchEngine {
         let manifest: PackManifest = serde_json::from_str(&manifest_json).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
         })?;
+
+        // A pack from a newer Golddig may use tables or columns this build has never seen.
+        // Say so now, in words, rather than failing on the first lookup with an error like
+        // "no such column: s.entry_id" — which is exactly what a build predating the
+        // integer-reference format did when handed a pack in that format.
+        if manifest.schema_version > SUPPORTED_SCHEMA_VERSION {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FORMAT),
+                Some(format!(
+                    "pack format {} is newer than this Golddig build supports ({}); \
+                     update Golddig to open {}",
+                    manifest.schema_version,
+                    SUPPORTED_SCHEMA_VERSION,
+                    p.display()
+                )),
+            ));
+        }
 
         // Terms are stored lowercased by the builder and queries are lowercased before
         // binding, so making LIKE case-sensitive is semantically a no-op — but it is what
@@ -925,7 +950,7 @@ mod tests {
         std::fs::write(
             &manifest,
             format!(
-                r#"{{"id":"{pack_id}","name":"{pack_id}","version":"1.0.0","schema_version":1,
+                r#"{{"id":"{pack_id}","name":"{pack_id}","version":"1.0.0","schema_version":2,
                     "languages":["en","ary"],"created_at":"2026-01-01T00:00:00Z",
                     "license":"CC0-1.0","sources":[]}}"#
             ),
@@ -1220,6 +1245,59 @@ mod tests {
             engine.suggest("one", 5).unwrap().is_empty(),
             "a disabled pack must not contribute results"
         );
+    }
+
+    /// A pack written by a newer Golddig must be refused with a message that names the fix.
+    /// Without this check, a build predating the integer-reference format opened a newer
+    /// pack fine and then failed on the first keystroke with "no such column: s.entry_id".
+    #[test]
+    fn test_pack_from_a_newer_format_is_refused_in_plain_words() {
+        let pack = build_tiny_pack(
+            "too-new",
+            "too-new-pack",
+            &[&entry_json("en:noun:future", "en", "future", &[])],
+        );
+
+        // Stamp the manifest with a format version this build does not know.
+        let conn = Connection::open(&pack).unwrap();
+        let json: String = conn
+            .query_row(
+                "SELECT value FROM manifest WHERE key = 'manifest'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let mut manifest: serde_json::Value = serde_json::from_str(&json).unwrap();
+        manifest["schema_version"] = serde_json::json!(SUPPORTED_SCHEMA_VERSION + 1);
+        conn.execute(
+            "UPDATE manifest SET value = ?1 WHERE key = 'manifest'",
+            params![manifest.to_string()],
+        )
+        .unwrap();
+        drop(conn);
+
+        let mut engine = SearchEngine::new();
+        let err = engine
+            .add_pack(&pack, true)
+            .expect_err("a pack from a newer format must not open");
+        let message = err.to_string();
+        assert!(
+            message.contains("newer than this Golddig build") && message.contains("update Golddig"),
+            "refusal must say what is wrong and what to do, got: {message}"
+        );
+        assert!(
+            engine.list_packs().is_empty(),
+            "the refused pack must not be registered"
+        );
+
+        // A pack at the current version still opens.
+        let current = build_tiny_pack(
+            "current",
+            "current-pack",
+            &[&entry_json("en:noun:now", "en", "now", &[])],
+        );
+        engine.add_pack(&current, true).unwrap();
+        assert_eq!(engine.list_packs().len(), 1);
     }
 
     /// A record's `source_id` is omitted from the stored JSON when it equals the pack

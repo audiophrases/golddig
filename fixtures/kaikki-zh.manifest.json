@@ -2,7 +2,7 @@
   "id": "kaikki-zh",
   "name": "Kaikki English Wiktionary (Chinese entries) — Chinese",
   "version": "2026.09.11",
-  "schema_version": 1,
+  "schema_version": 2,
   "languages": [
     "zh"
   ],

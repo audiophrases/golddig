@@ -2,7 +2,7 @@
   "id": "kaikki-ary",
   "name": "Kaikki English Wiktionary (Moroccan Arabic entries) — Moroccan Arabic (Darija)",
   "version": "2026.09.11",
-  "schema_version": 1,
+  "schema_version": 2,
   "languages": [
     "ary"
   ],

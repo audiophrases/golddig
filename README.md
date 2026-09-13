@@ -147,10 +147,20 @@ python scripts/install_packs.py kaikki-catalan.sqlite.gz kaikki-spanish.sqlite.g
 `%APPDATA%\com.golddig.app\packs` on Windows. Dropping `.sqlite` files there by hand works
 too; the install script only adds checksum verification and an integrity check.
 
-Whole-file gzip compresses a pack roughly 5×: the full seven-language set is about 7 GB
-unpacked and about 1.3 GB to download, and every file is under GitHub's 2 GB release-asset
-limit. Per-language: English ~400 MB, Chinese ~290 MB, German ~255 MB, Spanish ~220 MB,
-French ~107 MB, Catalan 42 MB, Darija 1 MB — most people want two or three of these, not all.
+Measured with `package_packs.py` over all seven packs: **5.25 GB unpacked, 1.24 GB to
+download**, every file under GitHub's 2 GB release-asset limit.
+
+| Pack | Entries | Unpacked | Download |
+| --- | ---: | ---: | ---: |
+| English | 1,491,592 | 1,674 MB | 500 MB |
+| Chinese | 194,134 | 1,149 MB | 257 MB |
+| Spanish | 810,914 | 905 MB | 180 MB |
+| German | 371,241 | 1,001 MB | 169 MB |
+| French | 403,164 | 444 MB | 89 MB |
+| Catalan | 198,460 | 200 MB | 42 MB |
+| Darija | 2,342 | 4 MB | 1 MB |
+
+Most people want two or three of these, not all: English + Catalan + Spanish is 722 MB.
 
 **Where translations come from.** English Wiktionary publishes translation tables only on
 *English* lemmas (english to ca/es/fr/de/zh and so on). A Catalan or Spanish entry carries an

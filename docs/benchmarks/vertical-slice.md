@@ -48,7 +48,8 @@ The realistic case, and the one that matters.
 | `*ight` | wildcard, literal **suffix** | 0.13 ms | 0.12 ms | 0.18 ms |
 | `morning light` | phrase (FTS5) | 0.36 ms | 0.29 ms | 0.55 ms |
 
-Pack open: 2.7 ms. Pack size 273.8 MB, of which the FTS5 index is about 13 MB (+4.9%).
+Pack open: 2.7 ms. Pack size 199.7 MB after the lean format (was 273.8 MB); the FTS5 index is
+about 13 MB of that.
 
 ## English — 1,491,592 entries, 1,986 MB
 
@@ -65,8 +66,9 @@ unindexed shapes stop being merely slow.
 | `*ight` | wildcard, literal suffix | 0.35 ms | 0.24 ms | 0.79 ms |
 | `morning light` | phrase (FTS5) | **1.2 ms** | 1.1 ms | 1.8 ms |
 
-Pack open: 9.3 ms. Pack size 2,190.7 MB. Every path except `l?ght` stays near a millisecond
-on 1.5M entries, and the phrase query returns a full 10 hits rather than a truncated few.
+Pack open: 9.3 ms. Pack size 1,674.0 MB after the lean format (was 2,190.7 MB). Every path
+except `l?ght` stays near a millisecond on 1.5M entries, and the phrase query returns a full
+10 hits rather than a truncated few.
 
 `l?ght` is the weakest indexed case: its literal prefix is one character, so the range probe
 covers every term beginning with `l` and GLOB filters them. 6 ms is still well inside budget.
@@ -137,6 +139,35 @@ an installed dictionary unreadable.
 **`l?ght` — a wildcard whose literal prefix is one character — is 6.1 ms on the English pack.**
 The range probe covers every term beginning with `l` and GLOB filters the rest. It is the
 weakest indexed shape and still well inside budget, so it is not worth more machinery.
+
+## Pack size
+
+Measured after removing two genuine redundancies from the format: the entry's text id stored
+five times over in `search_terms` and its indexes, and the pack-default `source_id` repeated
+on every sense, example, form and pronunciation (12.6% of the JSON). An unused `language`
+column and a redundant `UNIQUE` index went with them. Term counts and lookup latency are
+identical before and after.
+
+| Pack | Entries | Before | After | Change | Download (gzip) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| English | 1,491,592 | 2,190.7 MB | 1,674.0 MB | −23.6% | 500 MB (3.3×) |
+| Chinese | 194,134 | 1,604.0 MB | 1,149.3 MB | −28.4% | 257 MB (4.5×) |
+| German | 371,241 | 1,402.6 MB | 1,000.6 MB | −28.7% | 169 MB (5.9×) |
+| Spanish | 810,914 | 1,216.4 MB | 904.8 MB | −25.6% | 180 MB (5.0×) |
+| French | 403,164 | 590.6 MB | 444.2 MB | −24.8% | 89 MB (5.0×) |
+| Catalan | 198,460 | 273.8 MB | 199.7 MB | −27.1% | 42 MB (4.8×) |
+| Darija | 2,342 | 6.8 MB | 4.4 MB | −35.3% | 1 MB (3.8×) |
+| **Total** | **3,471,857** | **7,284.9 MB** | **5,376.9 MB** | **−26.2%** | **1,238 MB** |
+
+English compresses worst. Its content is the richest — 155,873 entries carry translation
+tables — and richer content is less repetitive than the inflection-heavy German and Spanish
+packs, which compress best.
+
+Per-row compression of the JSON payload was measured and deliberately not adopted: with a
+shared dictionary it reaches 7.8× on the payload for a 5 µs per-entry decode, which would
+take another ~40% off the installed size — but an already-compressed pack barely gzips again,
+so the download would grow slightly. This project optimises for download; the numbers are
+recorded here in case that changes.
 
 ## Reproducing
 

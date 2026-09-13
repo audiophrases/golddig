@@ -2,25 +2,28 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Speech synthesis for Golddig headwords and examples.
+// Speech for Golddig headwords and examples.
 //
-// This is the browser Web Speech API (`window.speechSynthesis`) using whatever voices
-// the host platform exposes. It is NOT Microsoft Edge neural TTS, and an earlier version
-// of this file claimed to be: it only ranked voices by matching /natural|neural|online/
-// against their names. Two things follow from that, and the UI depends on both:
+// Two routes, tried in this order:
 //
-//   1. Edge's "… Online (Natural)" voices are injected by the Edge browser itself. A
-//      Tauri WebView2 window does not get them, so inside golddig.exe you hear the local
-//      SAPI voice. They are also cloud-synthesised, so they would need network — which
-//      the rest of the app deliberately never uses.
-//   2. Windows ships no Catalan and no Moroccan Arabic voice by default. Previously
-//      `speak()` would fall through with no voice selected and the platform would read
-//      Catalan text aloud in English. `voiceStatusFor()` now reports that instead, and
-//      the UI disables the button.
+//   1. Microsoft neural voices, synthesised by the Rust side (src-tauri/src/tts.rs) through
+//      the same Edge "Read Aloud" service the Edge browser uses. This is what makes the
+//      speaker button work for Catalan and Moroccan Arabic, which have no local Windows
+//      voice at all, and what makes English sound like Edge's "Natural" voice rather than
+//      the SAPI one. It needs the network and it is user-initiated only — lookup itself
+//      never leaves the machine — and it can fail (offline, or Microsoft changes the
+//      endpoint), in which case the caller is told and route 2 is tried.
 //
-// For real offline neural audio the route is a bundled Piper (ONNX) voice per language
-// invoked from Rust, or shipping the Wiktionary recordings the importer now preserves in
-// PronunciationRecord.audio. Both are tracked in docs/roadmap.md, neither is this file.
+//   2. The browser Web Speech API (`window.speechSynthesis`) with whatever voices the host
+//      exposes. Inside a Tauri WebView2 window that is the local SAPI set; Edge's own
+//      online voices are injected by the Edge browser and are not available here. This
+//      route never speaks without a voice that matches the language: an earlier version
+//      fell through with no voice selected and read Catalan text aloud in English.
+//
+// `voiceStatusFor()` reports which route will be used so the UI can label the button
+// honestly instead of pretending, and `speakNeural()` reports what actually happened.
+
+import { invoke } from '@tauri-apps/api/core';
 
 let voices: SpeechSynthesisVoice[] = [];
 const listeners = new Set<(v: SpeechSynthesisVoice[]) => void>();
@@ -31,6 +34,34 @@ const readyWaiters = new Set<() => void>();
 
 export function speechAvailable(): boolean {
   return typeof window !== 'undefined' && !!window.speechSynthesis;
+}
+
+/**
+ * Languages the Rust side maps to a neural voice — mirror of `voice_for` in
+ * src-tauri/src/tts.rs, so the button can name the voice before the first click. The
+ * name the service actually used comes back with every clip, so drift here would show.
+ */
+const NEURAL_VOICE: Record<string, string> = {
+  en: 'en-US-JennyNeural',
+  ca: 'ca-ES-JoanaNeural',
+  es: 'es-ES-AlvaroNeural',
+  fr: 'fr-FR-DeniseNeural',
+  de: 'de-DE-KatjaNeural',
+  ary: 'ar-MA-MounaNeural',
+  ar: 'ar-MA-MounaNeural',
+  zh: 'zh-CN-XiaoxiaoNeural',
+  cmn: 'zh-CN-XiaoxiaoNeural',
+};
+
+/** Tauri 2 injects this into every webview it owns; a plain browser tab has no backend. */
+function inTauri(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+/** The neural voice that will be tried for `langCode`, or null when there is no backend. */
+export function neuralVoiceFor(langCode: string): string | null {
+  if (!inTauri()) return null;
+  return NEURAL_VOICE[langCode.toLowerCase()] ?? null;
 }
 
 function haveHighQualityVoice(): boolean {
@@ -124,15 +155,12 @@ export function getBestVoice(langCode: string): SpeechSynthesisVoice | null {
 }
 
 export type VoiceStatus =
-  | { kind: 'ready'; voiceName: string; cloud: boolean }
+  | { kind: 'ready'; voiceName: string; cloud: boolean; neural: boolean }
   | { kind: 'unsupported'; message: string }
   | { kind: 'no-voice'; message: string };
 
-/**
- * Whether this language can actually be spoken here, and by what. The UI uses this to
- * disable the speaker button rather than play the wrong language.
- */
-export function voiceStatusFor(langCode: string): VoiceStatus {
+/** Whether the local Web Speech route can speak this language, and with what. */
+function localVoiceStatusFor(langCode: string): VoiceStatus {
   if (!speechAvailable()) {
     return { kind: 'unsupported', message: 'Speech synthesis is unavailable in this window' };
   }
@@ -144,7 +172,18 @@ export function voiceStatusFor(langCode: string): VoiceStatus {
       message: `No ${name} speech voice is installed on this system`,
     };
   }
-  return { kind: 'ready', voiceName: voice.name, cloud: !voice.localService };
+  return { kind: 'ready', voiceName: voice.name, cloud: !voice.localService, neural: false };
+}
+
+/**
+ * Whether this language can be spoken here, and by what. The UI uses this to label the
+ * speaker button — and, when neither route has a voice, to disable it rather than play
+ * the wrong language.
+ */
+export function voiceStatusFor(langCode: string): VoiceStatus {
+  const neural = neuralVoiceFor(langCode);
+  if (neural) return { kind: 'ready', voiceName: neural, cloud: true, neural: true };
+  return localVoiceStatusFor(langCode);
 }
 
 /** Subscribe to voice-list changes so the UI can re-evaluate button state. */
@@ -157,9 +196,13 @@ export function onVoicesChanged(cb: (v: SpeechSynthesisVoice[]) => void): () => 
 let keepAliveInterval: ReturnType<typeof setInterval> | null = null;
 let currentToken = 0;
 
+/** The neural clip currently playing, so a new request or a stop can cut it off. */
+let currentClip: { audio: HTMLAudioElement; release: () => void } | null = null;
+
 /**
- * Speaks `text` in `langCode`. Returns the status it acted on; callers can surface a
- * `no-voice` result instead of silently producing the wrong language.
+ * Speaks `text` in `langCode` with the local Web Speech voice. Returns the status it acted
+ * on; callers can surface a `no-voice` result instead of silently producing the wrong
+ * language.
  */
 export function speak(
   text: string,
@@ -205,7 +248,86 @@ export function speak(
     }, 5000);
   });
 
-  return voiceStatusFor(langCode);
+  return localVoiceStatusFor(langCode);
+}
+
+/** Shape of the `speak_neural` command's reply (src-tauri/src/lib.rs, `SpeechClip`). */
+interface SpeechClip {
+  audio_base64: string;
+  voice: string;
+  cached: boolean;
+}
+
+function base64ToBlob(base64: string, type: string): Blob {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type });
+}
+
+/** Plays an MP3 clip from a blob URL. Resolves once playback has started. */
+function playClip(audioBase64: string): Promise<void> {
+  const url = URL.createObjectURL(base64ToBlob(audioBase64, 'audio/mpeg'));
+  const audio = new Audio(url);
+  const release = () => {
+    URL.revokeObjectURL(url);
+    if (currentClip?.audio === audio) currentClip = null;
+  };
+  currentClip = { audio, release };
+  audio.addEventListener('ended', release, { once: true });
+  audio.addEventListener('error', release, { once: true });
+  return audio.play().catch((e) => {
+    release();
+    throw e;
+  });
+}
+
+export type SpeakOutcome =
+  /** A Microsoft neural voice spoke it. `cached` means no network round trip this time. */
+  | { kind: 'neural'; voice: string; cached: boolean }
+  /** The neural route failed for `reason`; the local Web Speech voice spoke it instead. */
+  | { kind: 'local'; voiceName: string; reason: string }
+  /** Nothing could speak it. */
+  | { kind: 'failed'; message: string }
+  /** A newer request replaced this one before it played. */
+  | { kind: 'superseded' };
+
+/**
+ * Speaks `text` in `langCode`: the Microsoft neural voice first, the local voice if that
+ * fails. Returns what actually happened so the UI can say so — a fallback to the local
+ * voice is audible, and a reader who hears the wrong quality deserves to know why.
+ */
+export async function speakNeural(text: string, langCode: string): Promise<SpeakOutcome> {
+  text = text.trim();
+  if (!text) return { kind: 'failed', message: 'nothing to say' };
+
+  stopSpeaking();
+  const token = ++currentToken;
+
+  let reason: string;
+  if (neuralVoiceFor(langCode)) {
+    try {
+      const clip = await invoke<SpeechClip>('speak_neural', { text, lang: langCode });
+      if (token !== currentToken) return { kind: 'superseded' };
+      await playClip(clip.audio_base64);
+      return { kind: 'neural', voice: clip.voice, cached: clip.cached };
+    } catch (e) {
+      reason = e instanceof Error ? e.message : String(e);
+    }
+  } else {
+    reason = inTauri()
+      ? `no neural voice is mapped for ${langCode}`
+      : 'neural voices need the desktop app';
+  }
+  if (token !== currentToken) return { kind: 'superseded' };
+
+  const local = speak(text, langCode);
+  if (local.kind === 'ready') return { kind: 'local', voiceName: local.voiceName, reason };
+  const name = LANG_NAME[langCode.toLowerCase()] || langCode;
+  return {
+    kind: 'failed',
+    message: `${reason}; and there is no local ${name} voice to fall back to`,
+  };
 }
 
 export function stopSpeaking() {
@@ -213,6 +335,11 @@ export function stopSpeaking() {
   if (keepAliveInterval) {
     clearInterval(keepAliveInterval);
     keepAliveInterval = null;
+  }
+  if (currentClip) {
+    currentClip.audio.pause();
+    currentClip.release();
+    currentClip = null;
   }
   if (speechAvailable()) window.speechSynthesis.cancel();
 }

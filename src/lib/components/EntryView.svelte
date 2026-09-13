@@ -4,7 +4,7 @@
 
 <script lang="ts">
   import type { EntryRecord, FormRecord } from '../types';
-  import { speak, voiceStatusFor, onVoicesChanged } from '../tts';
+  import { speakNeural, voiceStatusFor, onVoicesChanged } from '../tts';
 
   let { entry }: { entry: EntryRecord } = $props();
 
@@ -18,10 +18,39 @@
   });
   const canSpeak = $derived(voice.kind === 'ready');
   const speakTitle = $derived(
-    voice.kind === 'ready'
-      ? `Speak with ${voice.voiceName}${voice.cloud ? ' (cloud voice, needs network)' : ''}`
-      : voice.message
+    voice.kind !== 'ready'
+      ? voice.message
+      : voice.neural
+        ? `Speak with the Microsoft neural voice ${voice.voiceName} — needs network`
+        : `Speak with ${voice.voiceName}${voice.cloud ? ' (cloud voice, needs network)' : ''}`
   );
+
+  // A neural clip is a network round trip (about a second). The button shows it is busy
+  // rather than looking dead, and anything short of the neural voice is reported here
+  // instead of letting the reader wonder why the audio sounds different.
+  let speaking = $state(false);
+  let speechNote = $state('');
+
+  async function say(text: string) {
+    speaking = true;
+    speechNote = '';
+    try {
+      const outcome = await speakNeural(text, entry.language);
+      if (outcome.kind === 'local') {
+        speechNote = `Neural voice unavailable (${outcome.reason}) — using the local voice ${outcome.voiceName}`;
+      } else if (outcome.kind === 'failed') {
+        speechNote = `Could not speak: ${outcome.message}`;
+      }
+    } finally {
+      speaking = false;
+    }
+  }
+
+  // A note about one entry's audio has no business lingering under the next.
+  $effect(() => {
+    void entry.id;
+    speechNote = '';
+  });
 
   /**
    * Inflections worth showing. A "FORMS" row was previously rendered for 98.8% of
@@ -56,8 +85,10 @@
       <h1 class="entry-lemma">{entry.lemma}</h1>
       <button
         class="tts-btn"
-        onclick={() => speak(entry.lemma, entry.language)}
+        class:busy={speaking}
+        onclick={() => say(entry.lemma)}
         disabled={!canSpeak}
+        aria-busy={speaking}
         title={speakTitle}
         aria-label={speakTitle}
       >
@@ -81,6 +112,10 @@
         <span class="entry-pos">{entry.pos}</span>
       {/if}
     </div>
+
+    {#if speechNote}
+      <p class="speech-note" role="status">{speechNote}</p>
+    {/if}
 
     {#if spoken.length > 0}
       <div class="pronunciations">
@@ -141,8 +176,10 @@
                     <span class="ex-quote">{ex.text}</span>
                     <button
                       class="tts-mini-btn"
-                      onclick={() => speak(ex.text, entry.language)}
+                      class:busy={speaking}
+                      onclick={() => say(ex.text)}
                       disabled={!canSpeak}
+                      aria-busy={speaking}
                       title={speakTitle}
                       aria-label="Speak this example"
                     >
@@ -232,6 +269,21 @@
   .tts-mini-btn:disabled {
     opacity: 0.35;
     cursor: not-allowed;
+  }
+  /* Fetching a neural clip: visibly working, still clickable so it can never wedge. */
+  .tts-btn.busy,
+  .tts-mini-btn.busy {
+    animation: tts-pulse 0.9s ease-in-out infinite;
+  }
+  @keyframes tts-pulse {
+    50% {
+      opacity: 0.4;
+    }
+  }
+  .speech-note {
+    margin: 0.3rem 0 0;
+    font-size: 0.78rem;
+    color: var(--text-muted);
   }
   .entry-lang {
     font-size: 0.8rem;

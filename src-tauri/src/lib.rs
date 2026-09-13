@@ -8,6 +8,7 @@ pub mod normalization;
 pub mod pack;
 pub mod search;
 pub mod settings;
+pub mod tts;
 
 use model::{EntryRecord, SearchSuggestion};
 use search::{PackInfo, PackLoadError, SearchEngine};
@@ -19,6 +20,8 @@ use tauri::{Manager, State};
 pub struct AppState {
     pub engine: Mutex<Option<SearchEngine>>,
     pub diagnostics: Mutex<PackDiagnostics>,
+    /// Synthesized speech clips, so replaying a headword does not hit the network again.
+    pub clips: tts::ClipCache,
     /// Where pack preferences are persisted. Empty when no data directory is available, in
     /// which case preferences apply for the session but are not saved.
     pub settings_path: Mutex<PathBuf>,
@@ -142,6 +145,54 @@ fn reorder_packs(
     Ok(engine.list_packs())
 }
 
+/// What the speaker button gets back: the audio, and which voice produced it, so the UI
+/// can say "Edge neural voice ca-ES-Joana" rather than pretending.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SpeechClip {
+    /// MP3 bytes, base64-encoded for the IPC boundary.
+    pub audio_base64: String,
+    pub voice: String,
+    pub cached: bool,
+}
+
+/// Synthesizes `text` in `lang` with a Microsoft neural voice via the Edge Read Aloud
+/// service. Needs the network; the frontend falls back to the local system voice when
+/// this fails, and says so.
+#[tauri::command]
+async fn speak_neural(
+    text: String,
+    lang: String,
+    state: State<'_, AppState>,
+) -> Result<SpeechClip, String> {
+    use base64::Engine as _;
+
+    let voice = tts::voice_for(&lang).ok_or_else(|| format!("no neural voice for {lang}"))?;
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err("nothing to say".into());
+    }
+    // Keep a request bounded: a whole example sentence is fine, an essay is not.
+    let text: String = text.chars().take(600).collect();
+
+    if let Some(clip) = state.clips.get(voice, &text) {
+        return Ok(SpeechClip {
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(clip),
+            voice: voice.to_string(),
+            cached: true,
+        });
+    }
+
+    let clip = tts::synthesize(&text, voice)
+        .await
+        .map_err(|e| e.to_string())?;
+    state.clips.put(voice, &text, clip.clone());
+    Ok(SpeechClip {
+        audio_base64: base64::engine::general_purpose::STANDARD.encode(clip),
+        voice: voice.to_string(),
+        cached: false,
+    })
+}
+
 #[tauri::command]
 fn pack_diagnostics(state: State<'_, AppState>) -> Result<PackDiagnostics, String> {
     let guard = state.diagnostics.lock().map_err(|e| e.to_string())?;
@@ -154,6 +205,7 @@ pub fn run() {
         .manage(AppState {
             engine: Mutex::new(None),
             diagnostics: Mutex::new(PackDiagnostics::default()),
+            clips: tts::ClipCache::default(),
             settings_path: Mutex::new(PathBuf::new()),
         })
         .setup(|app| {
@@ -224,7 +276,8 @@ pub fn run() {
             list_packs,
             toggle_pack,
             reorder_packs,
-            pack_diagnostics
+            pack_diagnostics,
+            speak_neural
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

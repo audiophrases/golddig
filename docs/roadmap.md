@@ -36,12 +36,14 @@
 >    **Leipzig Corpora Collection** (<https://wortschatz.uni-leipzig.de/en/download>)
 >    publishes per-language co-occurrence tables, licence per corpus. Until then the label
 >    overstates what the data is and should be read as "related words".
-> 3. **Offline neural pronunciation.** The speaker buttons are the platform Web Speech API,
->    which has no Catalan or Moroccan Arabic voice on Windows and whose best voices are
->    cloud-only. Two honest routes: ship the Wiktionary recordings the importer already
->    preserves in `PronunciationRecord.audio`, or bundle **Piper** ONNX voices
->    (<https://github.com/rhasspy/piper>, MIT, ~20–60 MB per voice) invoked from Rust for
->    genuinely offline synthesis.
+> 3. **Offline neural pronunciation.** The speaker buttons now use Microsoft's neural voices
+>    through the Edge Read Aloud service (`src-tauri/src/tts.rs`), which covers every pack
+>    language including Catalan and Moroccan Arabic — but it is a reverse-engineered
+>    endpoint that needs the network and could be withdrawn. The Wiktionary recordings the
+>    importer preserves in `PronunciationRecord.audio` play from the `rec` button (also a
+>    network fetch, from Wikimedia). Genuinely offline synthesis would mean bundling
+>    **Piper** ONNX voices (<https://github.com/rhasspy/piper>, MIT, ~20–60 MB per voice)
+>    invoked from Rust; nothing is built for that yet.
 >
 > **Pack priority — built, with one rough edge.** With eight packs enabled, a short query
 > matches many entries equally well: `man` is an exact lemma in English (noun, verb, pronoun,

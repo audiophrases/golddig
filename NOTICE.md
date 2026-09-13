@@ -63,8 +63,13 @@ Where example sentences are imported from Tatoeba (<https://tatoeba.org>):
 
 ## Speech synthesis
 
-The speaker buttons use the platform's Web Speech API (`window.speechSynthesis`) and
-whatever voices the host system provides. Golddig bundles no voice data and, despite an
-earlier claim in this project's history, does not implement Microsoft Edge neural TTS. A
-cloud voice selected by the host requires network access; ordinary dictionary lookup never
-does.
+The speaker buttons synthesize speech with Microsoft's neural voices through the same
+service Microsoft Edge's "Read Aloud" feature uses (`speech.platform.bing.com`). That
+service is not a documented public API: the app talks to it the way Edge does, following
+the open-source `edge-tts` project (<https://github.com/rany2/edge-tts>, GPL-3.0; Golddig
+contains none of its code, only its protocol description), and Microsoft may change or
+withdraw it at any time. Each click sends the text to be spoken to Microsoft, so it needs
+the network; the app sends nothing else. Ordinary dictionary lookup never leaves the
+machine. When the service is unreachable the app falls back to the platform's Web Speech
+API (`window.speechSynthesis`) and whatever voices the host provides, and says so beneath
+the headword. Golddig bundles no voice data.

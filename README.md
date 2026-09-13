@@ -97,6 +97,23 @@ Install the frontend dependencies and run the validation commands:
 - **Accent & Diacritic Normalization:**
   - Catalan ela geminada (`col·lecció` / `col.leccio`), Spanish `ñ` vs `n`, German `ß` vs `ss`, French `œ` vs `oe`, Arabic Alif/Tashkeel, and Pinyin tones.
 
+### Pronunciation
+
+Two buttons next to the headword, both user-initiated and both using the network — lookup
+itself never does.
+
+- **Speaker** synthesizes the headword (or an example sentence) with a Microsoft neural
+  voice: `ca-ES-Joana`, `es-ES-Alvaro`, `fr-FR-Denise`, `de-DE-Katja`, `ar-MA-Mouna`,
+  `zh-CN-Xiaoxiao`, `en-US-Jenny`. It talks to the same service Edge's own Read Aloud uses
+  (`src-tauri/src/tts.rs`), which is why Catalan and Moroccan Arabic work although Windows
+  ships no local voice for either. That service is undocumented and Microsoft can change
+  it; when it fails the app falls back to the local Web Speech voice and says so under the
+  headword, and if there is no local voice for the language either, it says that instead.
+  Clips are cached in memory for the session. If the button ever starts failing everywhere
+  with a 403, the version constant in `tts.rs` has fallen behind current Edge — see the
+  comment there.
+- **rec** plays the Wiktionary contributor recording, fetched from Wikimedia on click.
+
 ### Dictionary packs
 
 Packs are **generated artifacts and are not committed** — only the tiny authored

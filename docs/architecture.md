@@ -50,6 +50,11 @@ Status: **proposal for the first implementation spike**
 >   distinct. Packs built before the index exists still open and fall back to the old scan.
 > - **Reader-settable pack priority**, persisted to `pack-settings.json` in the app data
 >   directory, which breaks ranking ties between packs and also persists enable/disable.
+> - **Neural pronunciation** (`src-tauri/src/tts.rs`). The speaker button synthesizes with
+>   Microsoft neural voices through the Edge Read Aloud WebSocket service, one voice per pack
+>   language, MP3 handed to the WebView as a blob. The frontend falls back to the local Web
+>   Speech voice and reports the fallback. This is the one network call the app makes apart
+>   from the Wiktionary recording button, and like it, only on click.
 >
 > **Not built.** Do not read these as delivered:
 >

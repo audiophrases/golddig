@@ -22,6 +22,15 @@ unicode-normalization = "0.1"
 thiserror = "2"
 anyhow = "1"
 
+# Neural speech via the Edge Read Aloud service (see src/tts.rs). tokio, sha2, uuid and
+# base64 are already in the tree through Tauri; only the WebSocket client is new.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+futures-util = "0.3"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
+
 [profile.release]
 codegen-units = 1
 lto = true

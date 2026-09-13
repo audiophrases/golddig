@@ -198,6 +198,22 @@ pub fn run() {
             let state: State<'_, AppState> = app.state();
             *state.engine.lock().unwrap() = Some(engine);
             diagnostics.settings_path = settings_file.to_string_lossy().to_string();
+
+            // `golddig --pack-dirs` prints where packs and preferences are read from, then
+            // exits. Setting the app up on a second machine means knowing exactly which
+            // directory to copy packs into, and that path is platform-specific.
+            if std::env::args().any(|arg| arg == "--pack-dirs") {
+                println!("Golddig pack directories, in the order they are searched:");
+                for dir in &candidates {
+                    let state = if dir.is_dir() { "exists " } else { "missing" };
+                    println!("  [{state}] {}", dir.display());
+                }
+                println!("\nPacks loaded: {}", diagnostics.loaded);
+                println!("Preferences:  {}", diagnostics.settings_path);
+                println!("\nCopy .sqlite pack files into the first directory that exists,");
+                println!("or create the per-user one above. Every .sqlite file there is loaded.");
+                std::process::exit(0);
+            }
             *state.diagnostics.lock().unwrap() = diagnostics;
             *state.settings_path.lock().unwrap() = settings_file;
             Ok(())
